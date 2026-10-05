@@ -1,0 +1,35 @@
+Description: Guard QQuickBorderImage::sciRequestFinished() against a null sciReply
+ QQuickBorderImage::load() calls deleteLater() on d->sciReply and sets the
+ pointer to nullptr whenever the source is re-evaluated. The reply's finished()
+ signal can already be queued at that moment, so the slot may still run after
+ the pointer has been cleared -- at which point it dereferenced a null pointer
+ and terminated the process with SIGSEGV.
+ .
+ Reproducible on a multi-display setup: attaching a second screen re-evaluates
+ the border image source while a .sci request is in flight.
+ .
+ Every other reply-finished handler in Qt Quick already guards against this
+ exact case -- qquickanimatedimage.cpp uses "if (d->reply)" and
+ qquickfontloader.cpp uses "if (reply)". QQuickBorderImage was the only one
+ missing the check.
+Author: OnePlus 8 Pro Ubuntu Touch port
+Bug: shell SIGSEGV on DisplayPort hotplug
+Forwarded: no
+Last-Update: 2026-09-16
+--- a/src/quick/items/qquickborderimage.cpp
++++ b/src/quick/items/qquickborderimage.cpp
+@@ -467,6 +467,14 @@
+ {
+     Q_D(QQuickBorderImage);
+ 
++    // load() clears sciReply (after deleteLater()) whenever the source is
++    // re-evaluated, but a queued finished() from the old reply can still be
++    // delivered afterwards. Without this guard that is a null dereference.
++    // Matches the guards already present in QQuickAnimatedImage and
++    // QQuickFontObject.
++    if (!d->sciReply)
++        return;
++
+     d->redirectCount++;
+     if (d->redirectCount < BORDERIMAGE_MAX_REDIRECT) {
+         QVariant redirect = d->sciReply->attribute(QNetworkRequest::RedirectionTargetAttribute);

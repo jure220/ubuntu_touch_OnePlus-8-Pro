@@ -1,0 +1,475 @@
+diff --git a/drivers/input/touchscreen/oplus_touchscreen/touchpanel_common_driver.c b/drivers/input/touchscreen/oplus_touchscreen/touchpanel_common_driver.c
+index ec039d4e6..c008528f3 100644
+--- a/drivers/input/touchscreen/oplus_touchscreen/touchpanel_common_driver.c
++++ b/drivers/input/touchscreen/oplus_touchscreen/touchpanel_common_driver.c
+@@ -6290,6 +6290,23 @@ static int init_input_device(struct touchpanel_data *ts)
+ 	}
+ #endif
+ 	input_set_abs_params(ts->input_dev, ABS_MT_TOUCH_MAJOR, 0, 255, 0, 0);
++	/* HALIUM(instantnoodlep): the driver set_bit()s ABS_MT_WIDTH_MAJOR and
++	 * reports values on it (input_report_abs above), but never declared its
++	 * range -- so min and max both defaulted to 0. libinput treats that as a
++	 * kernel bug and REFUSES the whole device:
++	 *   libinput error: event1 - touchpanel: kernel bug: device has
++	 *                   min == max on ABS_MT_WIDTH_MAJOR
++	 * The touchscreen was then the only input device Mir did not add, so the
++	 * UI rendered but did not respond to touch. Same range as TOUCH_MAJOR,
++	 * which is the domain the driver actually reports width_major in. */
++	input_set_abs_params(ts->input_dev, ABS_MT_WIDTH_MAJOR, 0, 255, 0, 0);
++	/* HALIUM(instantnoodlep): same defect as WIDTH_MAJOR above --
++	 * ABS_MT_PRESSURE is set_bit() and reported on, but its range was never
++	 * declared, so libinput refused the device with
++	 *   kernel bug: device has min == max on ABS_MT_PRESSURE
++	 * (this surfaced only after WIDTH_MAJOR was fixed -- libinput reports
++	 * one offending axis at a time). */
++	input_set_abs_params(ts->input_dev, ABS_MT_PRESSURE, 0, 255, 0, 0);
+ 	input_set_abs_params(ts->input_dev, ABS_MT_POSITION_X, 0, ts->resolution_info.max_x - 1, 0, 0);
+ 	input_set_abs_params(ts->input_dev, ABS_MT_POSITION_Y, 0, ts->resolution_info.max_y - 1, 0, 0);
+ 	input_set_drvdata(ts->input_dev, ts);
+diff --git a/drivers/mailbox/msm_qmp.c b/drivers/mailbox/msm_qmp.c
+index 726f65677..dd023b6fb 100644
+--- a/drivers/mailbox/msm_qmp.c
++++ b/drivers/mailbox/msm_qmp.c
+@@ -986,10 +986,31 @@ static int qmp_mbox_probe(struct platform_device *pdev)
+ 			mdev->rx_irq_line, ret);
+ 		return ret;
+ 	}
+-	ret = enable_irq_wake(mdev->rx_irq_line);
+-	if (ret < 0)
+-		QMP_ERR(mdev->ilc, "enable_irq_wake on %d failed: %d\n",
+-			mdev->rx_irq_line, ret);
++	/*
++	 * DELIBERATELY NOT enable_irq_wake() -- 2026-09-18, Ubuntu Touch port.
++	 *
++	 * The IRQ above is requested with IRQF_NO_SUSPEND, which is correct and
++	 * necessary: this mailbox talks to the AOP and has to keep working
++	 * across the suspend path itself. But IRQF_NO_SUSPEND together with
++	 * enable_irq_wake() is a contradiction, and this kernel says so itself
++	 * in irq_may_run() (kernel/irq/chip.c):
++	 *
++	 *     if (desc->no_suspend_depth && irqd_is_wakeup_set(&desc->irq_data))
++	 *             log_abnormal_wakeup_reason("misconfigured IRQ %u %s", ...)
++	 *
++	 * On this device that produced, on every single suspend attempt:
++	 *     PM: suspend entry (deep)
++	 *     Resume caused by misconfigured IRQ 401 qcom,qmp-aop
++	 *     PM: suspend exit                       (~0.25 s later)
++	 * i.e. routine AOP power-management chatter was waking the whole SoC
++	 * immediately, so the phone never actually slept -- measured at ~0.2%
++	 * of wall time asleep.
++	 *
++	 * Dropping the wake registration does not stop the mailbox working
++	 * during suspend: IRQF_NO_SUSPEND already keeps the interrupt enabled
++	 * and the handler runs. It only stops an AOP message from counting as a
++	 * reason to wake the system, which is what it should never have been.
++	 */
+ 
+ 	/* Trigger fake RX in case of missed interrupt */
+ 	if (of_property_read_bool(edge_node, "qcom,early-boot"))
+diff --git a/include/linux/pid.h b/include/linux/pid.h
+index a82d2f739..fc5ff22c5 100644
+--- a/include/linux/pid.h
++++ b/include/linux/pid.h
+@@ -113,6 +113,7 @@ extern struct pid *find_vpid(int nr);
+  * Lookup a PID in the hash table, and return with it's count elevated.
+  */
+ extern struct pid *find_get_pid(int nr);
++extern struct pid *pidfd_get_pid(unsigned int fd);
+ extern struct pid *find_ge_pid(int nr, struct pid_namespace *);
+ int next_pidmap(struct pid_namespace *pid_ns, unsigned int last);
+ 
+diff --git a/include/uapi/linux/wait.h b/include/uapi/linux/wait.h
+index ac49a220c..85b809fc9 100644
+--- a/include/uapi/linux/wait.h
++++ b/include/uapi/linux/wait.h
+@@ -17,6 +17,7 @@
+ #define P_ALL		0
+ #define P_PID		1
+ #define P_PGID		2
++#define P_PIDFD		3
+ 
+ 
+ #endif /* _UAPI_LINUX_WAIT_H */
+diff --git a/kernel/exit.c b/kernel/exit.c
+index 31a432fa4..cadfa4e21 100644
+--- a/kernel/exit.c
++++ b/kernel/exit.c
+@@ -1691,11 +1691,21 @@ static long kernel_waitid(int which, pid_t upid, struct waitid_info *infop,
+ 		if (upid <= 0)
+ 			return -EINVAL;
+ 		break;
++	/* (halium) backport of waitid(P_PIDFD), upstream 3695eae5fee0 */
++	case P_PIDFD:
++		type = PIDTYPE_PID;
++		if (upid < 0)
++			return -EINVAL;
++
++		pid = pidfd_get_pid(upid);
++		if (IS_ERR(pid))
++			return PTR_ERR(pid);
++		break;
+ 	default:
+ 		return -EINVAL;
+ 	}
+ 
+-	if (type < PIDTYPE_MAX)
++	if (type < PIDTYPE_MAX && !pid)
+ 		pid = find_get_pid(upid);
+ 
+ 	wo.wo_type	= type;
+diff --git a/kernel/pid.c b/kernel/pid.c
+index e6028584e..c0f12fe4b 100644
+--- a/kernel/pid.c
++++ b/kernel/pid.c
+@@ -39,6 +39,7 @@
+ #include <linux/proc_ns.h>
+ #include <linux/proc_fs.h>
+ #include <linux/anon_inodes.h>
++#include <linux/file.h>
+ #include <linux/sched/signal.h>
+ #include <linux/sched/task.h>
+ #include <linux/idr.h>
+@@ -496,6 +497,47 @@ static int pidfd_create(struct pid *pid)
+  * Return: On success, a cloexec pidfd is returned.
+  *         On error, a negative errno number will be returned.
+  */
++/*
++ * (halium/instantnoodlep) Backport of waitid(P_PIDFD) support from Linux 5.4
++ * upstream commit 3695eae5fee0 ("pidfd: add P_PIDFD to waitid()").
++ *
++ * This kernel already carries the pidfd_open() backport but NOT the waitid()
++ * side, so glib 2.80 (Ubuntu 24.04) successfully obtains a pidfd and then
++ * fails with EINVAL in waitid(), killing lightdm:
++ *   glib/gmain.c: waitid(pid:N, pidfd=M) failed: Invalid argument (22)
++ */
++static struct pid *pidfd_pid(const struct file *file)
++{
++	if (file->f_op == &pidfd_fops)
++		return file->private_data;
++
++	return ERR_PTR(-EBADF);
++}
++
++/**
++ * pidfd_get_pid() - Retrieve some task's pid from a pidfd
++ * @fd: the pidfd
++ *
++ * Return: On success, the struct pid associated with the pidfd.
++ *         On error, an error pointer.
++ */
++struct pid *pidfd_get_pid(unsigned int fd)
++{
++	struct fd f;
++	struct pid *pid;
++
++	f = fdget(fd);
++	if (!f.file)
++		return ERR_PTR(-EBADF);
++
++	pid = pidfd_pid(f.file);
++	if (!IS_ERR(pid))
++		get_pid(pid);
++
++	fdput(f);
++	return pid;
++}
++
+ SYSCALL_DEFINE2(pidfd_open, pid_t, pid, unsigned int, flags)
+ {
+ 	int fd, ret;
+diff --git a/techpack/camera/drivers/cam_sensor_module/cam_sensor/cam_sensor_core.c b/techpack/camera/drivers/cam_sensor_module/cam_sensor/cam_sensor_core.c
+index a97eb61d4..bd249fd3b 100644
+--- a/techpack/camera/drivers/cam_sensor_module/cam_sensor/cam_sensor_core.c
++++ b/techpack/camera/drivers/cam_sensor_module/cam_sensor/cam_sensor_core.c
+@@ -1276,6 +1276,7 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
+ 		 */
+ 		s_ctrl->is_probe_succeed = 1;
+ 		s_ctrl->sensor_state = CAM_SENSOR_INIT;
++		s_ctrl->owner_tgid = current->tgid;
+ 
+ #ifdef CONFIG_PROJECT_INFO
+ 		if (s_ctrl->id == 0)
+diff --git a/techpack/camera/drivers/cam_sensor_module/cam_sensor/cam_sensor_dev.c b/techpack/camera/drivers/cam_sensor_module/cam_sensor/cam_sensor_dev.c
+index c908e7404..e555b7ee3 100644
+--- a/techpack/camera/drivers/cam_sensor_module/cam_sensor/cam_sensor_dev.c
++++ b/techpack/camera/drivers/cam_sensor_module/cam_sensor/cam_sensor_dev.c
+@@ -4,6 +4,9 @@
+  */
+ 
+ #include "cam_sensor_dev.h"
++#include <linux/sched.h>
++#include <linux/pid.h>
++#include <linux/pid_namespace.h>
+ #include "cam_req_mgr_dev.h"
+ #include "cam_sensor_soc.h"
+ #include "cam_sensor_core.h"
+@@ -242,6 +245,26 @@ static long cam_sensor_subdev_ioctl(struct v4l2_subdev *sd,
+         return rc;
+ }
+ 
++/*
++ * halium: is the process that probed this sensor still running?
++ * tgid is the GLOBAL id (the provider lives in the LXC pid namespace), so look
++ * it up in init_pid_ns, not in the caller's namespace.
++ */
++static bool cam_sensor_owner_alive(pid_t tgid)
++{
++	struct task_struct *t;
++	bool alive = false;
++
++	if (!tgid)
++		return false;
++	rcu_read_lock();
++	t = pid_task(find_pid_ns(tgid, &init_pid_ns), PIDTYPE_PID);
++	if (t && !(t->flags & PF_EXITING))
++		alive = true;
++	rcu_read_unlock();
++	return alive;
++}
++
+ static int cam_sensor_subdev_close(struct v4l2_subdev *sd,
+ 	struct v4l2_subdev_fh *fh)
+ {
+@@ -254,6 +277,29 @@ static int cam_sensor_subdev_close(struct v4l2_subdev *sd,
+ 	}
+ 
+ 	mutex_lock(&(s_ctrl->cam_sensor_mutex));
++	/*
++	 * halium: every close of this node runs cam_sensor_shutdown(), which
++	 * clears is_probe_succeed.  On Android only the camera provider opens
++	 * sensor nodes, but on a Halium device an unrelated Linux process that
++	 * merely opens and closes /dev/v4l-subdevN wiped the provider's probe
++	 * state; the next CAM_ACQUIRE_DEV then failed ("Not in right state to
++	 * aquire"), CamX aborted and the camera app showed a black viewfinder.
++	 * A foreign process never acquired the sensor, so its close must not
++	 * tear the provider's state down.  Closes by the owner itself, by an
++	 * exiting owner, or from kernel context (deferred fput, cam_req_mgr
++	 * shutdown) still shut the sensor down as before.
++	 */
++	if (!(current->flags & PF_KTHREAD) && s_ctrl->owner_tgid &&
++	    current->tgid != s_ctrl->owner_tgid &&
++	    cam_sensor_owner_alive(s_ctrl->owner_tgid)) {
++		CAM_WARN(CAM_SENSOR,
++			"close by %s (pid %d) ignored: sensor 0x%x is owned by pid %d",
++			current->comm, current->tgid,
++			s_ctrl->sensordata->slave_info.sensor_id,
++			s_ctrl->owner_tgid);
++		mutex_unlock(&(s_ctrl->cam_sensor_mutex));
++		return 0;
++	}
+         if(!is_ftm_current_test)
+             cam_sensor_shutdown(s_ctrl);
+ 	mutex_unlock(&(s_ctrl->cam_sensor_mutex));
+diff --git a/techpack/camera/drivers/cam_sensor_module/cam_sensor/cam_sensor_dev.h b/techpack/camera/drivers/cam_sensor_module/cam_sensor/cam_sensor_dev.h
+index b1963e15e..6a2edc430 100644
+--- a/techpack/camera/drivers/cam_sensor_module/cam_sensor/cam_sensor_dev.h
++++ b/techpack/camera/drivers/cam_sensor_module/cam_sensor/cam_sensor_dev.h
+@@ -97,6 +97,8 @@ struct cam_sensor_ctrl_t {
+ 	struct camera_io_master io_master_info;
+ 	enum cam_sensor_state_t sensor_state;
+ 	uint8_t is_probe_succeed;
++	/* halium: tgid of the process that probed the sensor (the camera provider) */
++	pid_t owner_tgid;
+ 	uint32_t id;
+ 	struct device_node *of_node;
+ 	struct cam_subdev v4l2_dev_str;
+diff --git a/arch/arm64/configs/vendor/halium.config b/arch/arm64/configs/vendor/halium.config
+new file mode 100644
+index 000000000..63ba8a3a4
+--- /dev/null
++++ b/arch/arm64/configs/vendor/halium.config
+@@ -0,0 +1,194 @@
++# Halium / Ubuntu Touch kernel requirements for instantnoodlep (sm8250, 4.19)
++#
++# !! COMMENT FORMATTING IS LOAD-BEARING IN THIS FILE !!
++# scripts/kconfig/merge_config.sh parses every line matching
++#     ^\(# \)\{0,1\}\(CONFIG_[a-zA-Z0-9_]*\)[= ]
++# so a COMMENT that begins with "# CONFIG_<name>" followed by a space is read
++# as a directive and silently UNSETS that symbol. On 2026-09-02 a comment
++# reading "# CONFIG_BT / BT_BREDR / ... are already =y" disabled Bluetooth
++# outright -- the build succeeded and produced a kernel with
++# "# CONFIG_BT is not set", the exact opposite of what the fragment intended.
++# ALWAYS indent a CONFIG_ name in prose by two or more spaces: "#   CONFIG_BT".
++# Verify after every change:
++#   grep -nE "^(# )?CONFIG_[a-zA-Z0-9_]*[= ]" halium.config
++# and confirm every hit is a real directive, not prose.
++#
++# Merged as a fragment on top of vendor/kona-perf_defconfig via
++# TARGET_KERNEL_CONFIG in device/oneplus/instantnoodlep/BoardConfig.mk.
++#
++# Every option below was verified to (a) be missing or disabled in the built
++# .config and (b) actually exist in THIS kernel's Kconfig. Options suggested by
++# halium/halium-boot/check-kernel-config that are obsolete in 4.19 were
++# deliberately NOT included -- that script is Halium 9-era and names options
++# from much older kernels:
++#   CONFIG_CGROUP_MEM_RES_CTLR*        -> renamed CONFIG_MEMCG in 3.6 (already =y)
++#   CONFIG_CC_STACKPROTECTOR           -> renamed CONFIG_STACKPROTECTOR in 4.18
++#   CONFIG_DEBUG_RODATA                -> renamed CONFIG_STRICT_KERNEL_RWX in 4.11
++#   CONFIG_DEVPTS_MULTIPLE_INSTANCES   -> removed in 4.7
++#   CONFIG_NETFILTER_TPROXY            -> removed
++#   CONFIG_RTC_DRV_CMOS                -> x86 only, meaningless on ARM
++
++# --- systemd hard requirements ---------------------------------------------
++# Ubuntu Touch runs systemd as PID 1. It refuses to boot without these.
++CONFIG_SYSVIPC=y
++CONFIG_FHANDLE=y
++CONFIG_DEVTMPFS=y
++CONFIG_DEVTMPFS_MOUNT=y
++CONFIG_AUTOFS4_FS=y
++CONFIG_FANOTIFY=y
++
++# --- namespaces -------------------------------------------------------------
++# Halium runs the Android side inside an LXC container.
++CONFIG_NAMESPACES=y
++CONFIG_IPC_NS=y
++CONFIG_PID_NS=y
++CONFIG_USER_NS=y
++
++# --- cgroups ----------------------------------------------------------------
++#   CONFIG_CGROUPS / CGROUP_SCHED / MEMCG / NET_NS are already =y in the
++# stock defconfig; these two are not.
++CONFIG_CGROUP_DEVICE=y
++CONFIG_CGROUP_PERF=y
++
++# --- SELinux must be disableable -------------------------------------------
++# Halium neutralises SELinux (hybris-patches "disable SELinux parts" +
++# libselinux_stubs). Without BOOTPARAM/DISABLE the kernel gives no way to turn
++# it off at runtime.
++CONFIG_SECURITY_SELINUX_BOOTPARAM=y
++CONFIG_SECURITY_SELINUX_DISABLE=y
++
++# --- console ----------------------------------------------------------------
++# Useful for early-boot debugging. FRAMEBUFFER_CONSOLE is deliberately left
++# unset (check-kernel-config also wants it unset) so this cannot fight the
++# display driver.
++CONFIG_VT=y
++CONFIG_VT_CONSOLE=y
++
++# --- USB gadget functions needed by Ubuntu Touch's usb_moded ---
++#
++# THIS IS WHY SSH/RNDIS KEPT DISAPPEARING. usb_moded's "developer_mode" builds
++# the gadget from rndis.usb0, but this kernel shipped with
++#     # CONFIG_USB_CONFIGFS_RNDIS is not set
++# so the function was never registered. The journal shows the whole chain:
++#     /sys/kernel/config/usb_gadget/g1//functions/rndis.usb0: mkdir failed
++#     function rndis.usb0 is not registered
++#     mode developer_mode: network interface rndis0 does not exist
++#     mode setting failed, try charging_only
++# ...and with no network there was no way into the device at all.
++#
++# ECM is enabled too as a fallback transport; NCM was already on (=y), which is
++# why boot 0 fell back to ncm.usb0 and then died on a missing 'wceis' attribute.
++CONFIG_USB_CONFIGFS_RNDIS=y
++CONFIG_USB_CONFIGFS_ECM=y
++CONFIG_USB_CONFIGFS_ECM_SUBSET=y
++
++# --- Wi-Fi (QCA6390) ---
++# The stock vendor ships a prebuilt qca_cld3_qca6390.ko, but it CANNOT be used:
++#     vermagic 4.19.157-perf+   vs our 4.19.324-perf-...
++#     insmod: Required key not available     (CONFIG_MODULE_SIG_FORCE=y)
++# The driver source IS in this kernel tree (drivers/staging/qcacld-3.0, hooked up
++# via obj-$(CONFIG_QCA_CLD_WLAN)), so build it ourselves: it then matches our
++# vermagic AND is auto-signed with our key (CONFIG_MODULE_SIG_ALL=y).
++# Without it there is no wlan interface at all and cnss logs
++#     cnss: QMI WLFW service disconnected
++# configs/qca6390_defconfig is the profile for this chip.
++CONFIG_CNSS_QCA6390=y
++CONFIG_QCA_CLD_WLAN=m
++CONFIG_QCA_CLD_WLAN_PROFILE="qca6390"
++
++# --- Bluetooth (added 2026-09-02) -------------------------------------------
++#
++# WHY: bluetoothd ran fine but /sys/class/bluetooth/ was empty and hciconfig
++# saw no adapter, because there was no HCI transport at all. On Halium the
++# Android BT HAL is bridged into the Linux stack by `bluebinder`, which proxies
++# through /dev/vhci -- and this kernel shipped with
++#     # CONFIG_BT_HCIVHCI is not set
++# so /dev/vhci never existed and bluebinder crash-looped in its pre-start wait
++# (restart counter reached 124). There is no /lib/modules on this device
++# (monolithic kernel), so it has to be built in, not modprobed.
++#
++#   CONFIG_BT / BT_BREDR / BT_LE / BT_SLIM_QCA6390 are already =y in the stock
++# defconfig; only these are missing. All seven verified present in THIS
++# kernel's Kconfig (drivers/bluetooth/Kconfig, net/bluetooth/*/Kconfig) and
++# their deps (NET, UNIX, INPUT, HID, TTY) are all already =y.
++CONFIG_BT_HCIVHCI=y
++
++# Profiles. bluetoothd already logs "kernel lacks bnep-protocol support" and
++# refuses to load its network plugin without BNEP.
++CONFIG_BT_RFCOMM=y
++CONFIG_BT_RFCOMM_TTY=y
++CONFIG_BT_BNEP=y
++CONFIG_BT_BNEP_MC_FILTER=y
++CONFIG_BT_BNEP_PROTO_FILTER=y
++CONFIG_BT_HIDP=y
++
++# --- Suspend: let repowerd own it (added 2026-09-19) ------------------------
++#
++# WHY: repowerd could not manage suspend at all on this device. Its own log:
++#     DefaultDaemonConfig: Failed to create LibsuspendSystemPowerControl:
++#                          Failed to initialize libsuspend
++#     DefaultDaemonConfig: Trying LogindSystemPowerControl
++#
++# repowerd vendors its own libsuspend (src/adapters/libsuspend/) with exactly
++# three real backends, tried in this order, and NO wakeup_count backend:
++#
++#   earlysuspend_detect()  needs /sys/power/wait_for_fb_sleep   -- absent (4.19)
++#   autosleep_detect()     needs /sys/power/autosleep           -- absent
++#   legacy_detect()        needs /sys/power/state AND requires
++#                          /sys/power/wake_lock to NOT exist    -- it DOES exist
++#
++# That last one is the trap: legacy_detect() is
++#     if (sysfs_file_exists(state_path) && !sysfs_file_exists(wakelock_path))
++# so having   CONFIG_PM_WAKELOCKS=y   (which this defconfig sets, and which
++# Android needs) actively DISQUALIFIES the legacy backend. All three fail and
++# repowerd falls back to logind.
++#
++# Consequences of that fallback, all observed on hardware:
++#   * repowerd only ever *permits* suspend and never initiates one, so the phone
++#     never slept until we added halium-idle-suspend.sh to call
++#     `systemctl suspend` externally.
++#   * every logind suspend/resume cycle makes repowerd run handle_system_resume,
++#     which turns the DISPLAY ON. With the modem waking the SoC within seconds of
++#     each suspend, the screen lit up by itself every few minutes.
++#   * NetworkManager treats each cycle as a real sleep/wake, so wlan0 fully
++#     re-associates (4-way handshake + DHCP) every time and the wifi indicator
++#     drops to the generic "gear" icon during the gap.
++#
++# Enabling autosleep gives repowerd the backend it was designed for: the kernel
++# suspends by itself whenever no wakelock is held and re-suspends immediately
++# after a wakeup, with no logind sleep cycle, no resume event, and therefore no
++# display wake and no NetworkManager churn.
++#
++# autosleep_detect() needs only /sys/power/autosleep; the handler then writes
++# "mem"/"off" there and uses /sys/power/wake_lock and /sys/power/wake_unlock,
++# both of which already exist here because   CONFIG_PM_WAKELOCKS   is already =y.
++# So this single option is all that is missing.
++CONFIG_PM_AUTOSLEEP=y
++
++# Waydroid: waydroid-net.sh installs the lxc-net DHCP checksum fixup
++#   iptables -t mangle -A POSTROUTING -o waydroid0 -p udp --dport 68 -j CHECKSUM --checksum-fill
++# and aborts the whole network setup (set -e + cleanup trap) if the target is
++# missing, which makes `waydroid session start` fail.
++CONFIG_NETFILTER_XT_TARGET_CHECKSUM=m
++
++# Mobile data needs NOTHING from the kernel config.
++#
++# From 2026-09-20 to 2026-09-23 this file enabled the TIPC network protocol, on
++# the theory that netmgrd and the RIL's libdsi_netctrl disagreed on transport.
++# That was wrong: netmgrd was simply stuck waiting for an INetd HIDL service
++# that Halium does not ship, so it never created its UNIX socket.  The fix is
++# the stub service in device-files/netd-stub/ (PERFORMANCE-FINDINGS.md
++# section 24), and mobile data was verified working on the stock netmgrd
++# configuration.  TIPC was removed again: it is an unused network protocol and
++# only extra attack surface.  Do not re-add it for mobile data.
++
++# No NTP write-back to the hardware clock (added 2026-10-04).
++#
++# The PM8150 RTC is owned by the secure firmware: every write from Linux is
++# refused at the SPMI arbiter ("disallowed SPMI write to sid=0, addr=0x6046").
++# With the write-back option on, systemd-timesyncd's synchronised clock made the
++# kernel try to store the time in the RTC, and after each failure it retries
++# about once a second, forever: 1 Hz wakeups while awake, and a kernel log
++# flooded with "Write to RTC control register failed". The wall clock is carried
++# in userspace instead (halium-time.sh). Reading the RTC at boot stays on.
++# CONFIG_RTC_SYSTOHC is not set

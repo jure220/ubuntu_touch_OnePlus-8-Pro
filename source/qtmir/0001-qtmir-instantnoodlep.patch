@@ -1,0 +1,199 @@
+diff -ruN a/src/platforms/mirserver/displayconfigurationpolicy.cpp b/src/platforms/mirserver/displayconfigurationpolicy.cpp
+--- a/src/platforms/mirserver/displayconfigurationpolicy.cpp	2026-09-02 16:57:11.000000000 +0200
++++ b/src/platforms/mirserver/displayconfigurationpolicy.cpp	2026-09-25 06:32:29.071921042 +0200
+@@ -27,6 +27,12 @@
+ 
+ #define ENV_GRID_UNIT_PX "GRID_UNIT_PX"
+ #define DEFAULT_GRID_UNIT_PX 8
++// halium: grid unit for an external monitor attached to a phone.  Upstream
++// hard-codes scale 1 (8 px), which on a large desktop monitor draws the whole
++// shell at a third of its phone size -- panel icons such as the battery are
++// ~14 px and lose their outlines.  The monitor's physical size cannot be used
++// instead: through hwc2 Mir receives no EDID for the output.
++#define ENV_EXTERNAL_GRID_UNIT_PX "EXTERNAL_GRID_UNIT_PX"
+ 
+ namespace mg = mir::graphics;
+ 
+@@ -54,9 +60,16 @@
+             gridUnit = getenvFloat(ENV_GRID_UNIT_PX, DEFAULT_GRID_UNIT_PX);
+         }
+         m_defaultScale = gridUnit / DEFAULT_GRID_UNIT_PX;
++
++        float externalGridUnit = getenvFloat(ENV_EXTERNAL_GRID_UNIT_PX, DEFAULT_GRID_UNIT_PX);
++        if (externalGridUnit <= 0) {
++            externalGridUnit = DEFAULT_GRID_UNIT_PX;
++        }
++        m_externalScale = externalGridUnit / DEFAULT_GRID_UNIT_PX;
+     }
+ 
+     float m_defaultScale;
++    float m_externalScale;
+ };
+ 
+ DisplayConfigurationPolicy::DisplayConfigurationPolicy() :
+@@ -105,7 +118,7 @@
+                     output.scale = d->m_defaultScale;
+                 } else { // screenCount > 1 && output.type != lvds
+                     output.form_factor = mir_form_factor_monitor;
+-                    output.scale = 1;
++                    output.scale = d->m_externalScale;
+                 }
+             } else { // desktop
+                 output.form_factor = mir_form_factor_monitor;
+diff -ruN a/src/platforms/mirserver/miropenglcontext.cpp b/src/platforms/mirserver/miropenglcontext.cpp
+--- a/src/platforms/mirserver/miropenglcontext.cpp	2026-09-02 16:57:11.000000000 +0200
++++ b/src/platforms/mirserver/miropenglcontext.cpp	2026-09-17 23:07:56.546205181 +0200
+@@ -162,8 +162,13 @@
+     // ultimately calls Mir's DisplayBuffer::make_current()
+     ScreenPlatformWindow *screenWindow = static_cast<ScreenPlatformWindow*>(surface);
+     if (Q_LIKELY(screenWindow)) {
++        if (!screenWindow->makeCurrent()) {
++            // No render target on this screen yet. Returning false makes Qt
++            // skip the frame and retry, instead of issuing GL calls with no
++            // current context.
++            return false;
++        }
+         m_currentWindow = screenWindow;
+-        screenWindow->makeCurrent();
+ 
+ #ifdef QGL_DEBUG
+         if (!m_logger->isLogging() && m_logger->initialize()) {
+diff -ruN a/src/platforms/mirserver/nativeinterface.cpp b/src/platforms/mirserver/nativeinterface.cpp
+--- a/src/platforms/mirserver/nativeinterface.cpp	2026-09-02 16:57:11.000000000 +0200
++++ b/src/platforms/mirserver/nativeinterface.cpp	2026-09-18 04:19:01.479305082 +0200
+@@ -49,7 +49,7 @@
+     return nullptr;
+ }
+ 
+-void NativeInterface::setWindowProperty(QPlatformWindow */*window*/, const QString &name, const QVariant &value)
++void NativeInterface::setWindowProperty(QPlatformWindow *window, const QString &name, const QVariant &value)
+ {
+     if (name.isNull()) {
+         return;
+@@ -62,11 +62,27 @@
+ 
+     if (name == QStringLiteral("availableDesktopArea")) {
+         QRect rect = value.toRect();
+-        if (rect.isValid()) {
++        // During DP hotplug Lomiri's AvailableDesktopArea often reports
++        // QRect(0,y 0x0) while ShellScreen/OrientedShell is still sizing. Fall
++        // back to the platform window geometry (minus the reported panel and
++        // launcher insets) so Mir still gets a usable confinement region and
++        // the external desktop can paint.
++        if (!rect.isValid() || rect.width() <= 0 || rect.height() <= 0) {
++            if (window && window->window()) {
++                const QRect geo = window->window()->geometry();
++                const int x = qMax(0, rect.x());
++                const int y = qMax(0, rect.y());
++                rect = QRect(x, y, qMax(0, geo.width() - x), qMax(0, geo.height() - y));
++                qWarning().nospace() << "NativeInterface::setWindowProperty(availableDesktopArea)"
++                    << " empty from QML; falling back to window geometry " << rect
++                    << " (window " << geo << ")";
++            }
++        }
++        if (rect.isValid() && rect.width() > 0 && rect.height() > 0) {
+             windowController->setWindowConfinementRegions({rect});
+         } else {
+             qWarning().nospace() << "NativeInterface::setWindowProperty("
+-                << name << "," << value << ") - value is not a QRect";
++                << name << "," << value << ") - value is not a usable QRect";
+        }
+     } else if (name.endsWith(QStringLiteral("WindowMargins"))) {
+         if (value.canConvert(QMetaType::QRect)) {
+diff -ruN a/src/platforms/mirserver/platformscreen.cpp b/src/platforms/mirserver/platformscreen.cpp
+--- a/src/platforms/mirserver/platformscreen.cpp	2026-09-02 16:57:11.000000000 +0200
++++ b/src/platforms/mirserver/platformscreen.cpp	2026-09-17 23:07:56.545957578 +0200
+@@ -345,8 +345,17 @@
+     }
+ 
+     if (!qFuzzyCompare(screen.scale, m_scale)) {
+-        m_scale = screen.scale;
+-        Q_EMIT scaleChanged();
++        // Mir on this device briefly flips the phone panel (LVDS) scale from
++        // ~2.625 to 1.0 during DisplayPort hotplug/unplug. Applying that in
++        // place shrinks the whole UI and QML often never fully recovers when
++        // the scale returns. Refuse the bogus drop.
++        if (internalDisplay() && screen.scale < 1.5f && m_scale >= 1.5f) {
++            qCWarning(QTMIR_SCREENS) << "Ignoring transient scale" << screen.scale
++                << "for internal display; keeping" << m_scale;
++        } else {
++            m_scale = screen.scale;
++            Q_EMIT scaleChanged();
++        }
+     }
+ }
+ 
+@@ -478,6 +487,11 @@
+ 
+ void PlatformScreen::swapBuffers()
+ {
++    // Re-applied after the 24.04-2.x upgrade. During DisplayPort hotplug Qt can
++    // drive a Screen whose Mir DisplayBuffer has already gone away.
++    if (!m_renderTarget || !m_displayGroup) {
++        return;
++    }
+     m_renderTarget->swap_buffers();
+ 
+     /* FIXME this exposes a QtMir architecture problem, as Screen is supposed to wrap a mg::DisplayBuffer.
+@@ -494,13 +508,20 @@
+     m_displayGroup->post();
+ }
+ 
+-void PlatformScreen::makeCurrent()
++bool PlatformScreen::makeCurrent()
+ {
++    if (!m_renderTarget) {
++        return false;
++    }
+     m_renderTarget->make_current();
++    return true;
+ }
+ 
+ void PlatformScreen::doneCurrent()
+ {
++    if (!m_renderTarget) {
++        return;
++    }
+     m_renderTarget->release_current();
+ }
+ 
+diff -ruN a/src/platforms/mirserver/platformscreen.h b/src/platforms/mirserver/platformscreen.h
+--- a/src/platforms/mirserver/platformscreen.h	2026-09-02 16:57:11.000000000 +0200
++++ b/src/platforms/mirserver/platformscreen.h	2026-09-17 23:07:56.545801945 +0200
+@@ -118,7 +118,7 @@
+     void setMirDisplayConfiguration(const mir::graphics::DisplayConfigurationOutput &, bool notify = true);
+     void setMirDisplayBuffer(mir::graphics::DisplayBuffer *, mir::graphics::DisplaySyncGroup *);
+     void swapBuffers();
+-    void makeCurrent();
++    bool makeCurrent();
+     void doneCurrent();
+ 
+ private:
+diff -ruN a/src/platforms/mirserver/screenplatformwindow.cpp b/src/platforms/mirserver/screenplatformwindow.cpp
+--- a/src/platforms/mirserver/screenplatformwindow.cpp	2026-09-02 16:57:11.000000000 +0200
++++ b/src/platforms/mirserver/screenplatformwindow.cpp	2026-09-17 23:07:56.546122940 +0200
+@@ -204,10 +204,10 @@
+     if (scrn) scrn->swapBuffers();
+ }
+ 
+-void ScreenPlatformWindow::makeCurrent()
++bool ScreenPlatformWindow::makeCurrent()
+ {
+     auto scrn = static_cast<PlatformScreen *>(screen());
+-    if (scrn) scrn->makeCurrent();
++    return scrn && scrn->makeCurrent();
+ }
+ 
+ void ScreenPlatformWindow::doneCurrent()
+diff -ruN a/src/platforms/mirserver/screenplatformwindow.h b/src/platforms/mirserver/screenplatformwindow.h
+--- a/src/platforms/mirserver/screenplatformwindow.h	2026-09-02 16:57:11.000000000 +0200
++++ b/src/platforms/mirserver/screenplatformwindow.h	2026-09-17 23:07:56.546045219 +0200
+@@ -44,7 +44,7 @@
+     void setScreen(QPlatformScreen *screen);
+ 
+     void swapBuffers();
+-    void makeCurrent();
++    bool makeCurrent();
+     void doneCurrent();
+ 
+ public Q_SLOTS:

@@ -1,0 +1,159 @@
+--- a/src/platforms/evdev/fd_store.h	2026-09-25 07:14:38.052631021 +0200
++++ b/src/platforms/evdev/fd_store.h	2026-09-25 07:14:38.073540568 +0200
+@@ -19,6 +19,7 @@
+ #ifndef MIR_INPUT_EVDEV_FDSTORE_H_
+ #define MIR_INPUT_EVDEV_FDSTORE_H_
+ 
++#include <deque>
+ #include <unordered_map>
+ #include <sys/sysmacros.h>
+ 
+@@ -43,7 +44,22 @@
+     FdStore(FdStore const&) = delete;
+     FdStore& operator=(FdStore const&) = delete;
+ 
+-    std::unordered_map<std::string, mir::Fd> fds;
++    /*
++     * halium: fds are owned per fd, not per path.  The original store kept one
++     * fd per device path, so when a device node was destroyed and recreated
++     * under the same name (lomiri's virtual touchpad mouse does exactly this,
++     * several times within milliseconds, when an external display is
++     * unplugged) storing the new device's fd overwrote -- and closed -- the fd
++     * libinput was still using for the old device.  libinput then read from
++     * and "closed" whatever the kernel handed that fd number to next, which
++     * crashed the system compositor with heap corruption or with "Input
++     * device not managed by server".
++     *
++     * pending: opened by Mir, not yet handed to libinput (FIFO per path).
++     * open:    handed to libinput, keyed by the fd number libinput holds.
++     */
++    std::unordered_map<std::string, std::deque<mir::Fd>> pending;
++    std::unordered_map<int, mir::Fd> open;
+ };
+ 
+ }
+--- a/src/platforms/evdev/fd_store.cpp	2026-09-25 07:14:38.055123449 +0200
++++ b/src/platforms/evdev/fd_store.cpp	2026-09-25 07:14:38.073629270 +0200
+@@ -30,38 +30,53 @@
+ 
+ void mie::FdStore::store_fd(char const* path, mir::Fd&& fd)
+ {
+-    fds[path] = std::move(fd);
++    pending[path].push_back(std::move(fd));
+ }
+ 
+ mir::Fd mie::FdStore::take_fd(char const* path)
+ {
+-    try
++    auto const queue = pending.find(path);
++    if (queue == pending.end() || queue->second.empty())
+     {
+-        return fds.at(path);
++        mir::log_warning("Failed to find requested fd for path %s", path);
++        return mir::Fd{};
+     }
+-    catch (std::out_of_range const&)
++
++    mir::Fd fd{std::move(queue->second.front())};
++    queue->second.pop_front();
++    if (queue->second.empty())
+     {
+-        mir::log_warning("Failed to find requested fd for path %s", path);
++        pending.erase(queue);
+     }
+-    return mir::Fd{};
++    open[fd] = fd;
++    return fd;
+ }
+ 
+ void mie::FdStore::remove_fd(int fd)
+ {
+-    auto element = std::find_if(
+-        fds.begin(),
+-        fds.end(),
+-        [fd](auto const& pair)
+-        {
+-            return pair.second == fd;
+-        });
+-
+-    if (element == fds.end())
++    if (open.erase(fd))
+     {
+-        mir::log_warning("Attempted to remove unmanaged fd %i", fd);
++        return;
+     }
+-    else
++
++    // Never handed to libinput (it rejected the device before opening it).
++    for (auto queue = pending.begin(); queue != pending.end(); ++queue)
+     {
+-        fds.erase(element);
++        auto const element = std::find_if(
++            queue->second.begin(),
++            queue->second.end(),
++            [fd](mir::Fd const& stored) { return stored == fd; });
++
++        if (element != queue->second.end())
++        {
++            queue->second.erase(element);
++            if (queue->second.empty())
++            {
++                pending.erase(queue);
++            }
++            return;
++        }
+     }
++
++    mir::log_warning("Attempted to remove unmanaged fd %i", fd);
+ }
+--- a/src/platforms/evdev/libinput_ptr.cpp	2026-09-25 07:14:38.057658197 +0200
++++ b/src/platforms/evdev/libinput_ptr.cpp	2026-09-25 07:14:38.073709411 +0200
+@@ -38,14 +38,20 @@
+ {
+     auto fd_store = static_cast<mie::FdStore*>(userdata);
+ 
++    // halium: take_fd() hands ownership of one pending fd to libinput, so it
++    // must be called exactly once per open (it was called twice).
+     auto fd = fd_store->take_fd(path);
++    if (fd == mir::Fd::invalid)
++    {
++        return -ENOENT;
++    }
+ 
+     if (fcntl(fd, F_SETFL, flags) == -1)
+     {
+         std::cerr << "Failed to set flags: " << strerror(errno) << " (" << errno << ")" << std::endl;
+     }
+ 
+-    return fd_store->take_fd(path);
++    return fd;
+ }
+ 
+ void fd_close(int fd, void* userdata)
+--- a/src/platforms/evdev/platform.cpp	2026-09-25 07:14:38.060159215 +0200
++++ b/src/platforms/evdev/platform.cpp	2026-09-25 07:14:38.073867693 +0200
+@@ -435,12 +435,24 @@
+     try
+     {
+         devices.emplace_back(std::make_shared<mie::LibInputDevice>(report, move(device_ptr)));
++    } catch(...)
++    {
++        mir::log_error("Failure opening device %s", libinput_device_get_sysname(dev));
++        report->failed_to_open_input_device(libinput_device_get_sysname(dev), "evdev-input");
++        return;
++    }
+ 
++    try
++    {
+         input_device_registry->add_device(devices.back());
+ 
+         report->opened_input_device(libinput_device_get_sysname(dev), "evdev-input");
+     } catch(...)
+     {
++        // halium: the registry does not know this device, so the platform must
++        // not either -- otherwise its later removal asks the registry to remove
++        // an unknown device, which throws and aborts the whole compositor.
++        devices.pop_back();
+         mir::log_error("Failure opening device %s", libinput_device_get_sysname(dev));
+         report->failed_to_open_input_device(libinput_device_get_sysname(dev), "evdev-input");
+     }

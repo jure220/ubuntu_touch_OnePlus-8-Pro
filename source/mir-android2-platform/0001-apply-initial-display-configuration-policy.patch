@@ -1,0 +1,47 @@
+diff --git a/src/platforms/android/server/platform.cpp b/src/platforms/android/server/platform.cpp
+index c6386ca..f0e8e46 100644
+--- a/src/platforms/android/server/platform.cpp
++++ b/src/platforms/android/server/platform.cpp
+@@ -18,6 +18,7 @@
+  */
+ 
+ #include "platform.h"
++#include "mir/graphics/display_configuration_policy.h"
+ 
+ #include "graphic_buffer_allocator.h"
+ #include "hybris_gralloc_impl.h"
+@@ -236,12 +237,32 @@ mga::HwcPlatform::HwcPlatform(
+ }
+ 
+ mir::UniqueModulePtr<mg::Display> mga::HwcPlatform::create_display(
+-    std::shared_ptr<mg::DisplayConfigurationPolicy> const&,
++    std::shared_ptr<mg::DisplayConfigurationPolicy> const& initial_conf_policy,
+     std::shared_ptr<mg::GLConfig> const& gl_config)
+ {
+     auto const program_factory = std::make_shared<mir::gl::DefaultProgramFactory>();
+-    return mir::make_module_ptr<mga::Display>(
++    auto display = mir::make_module_ptr<mga::Display>(
+             display_buffer_builder, program_factory, gl_config, display_report, native_window_report, overlay_option);
++
++    /*
++     * halium: apply the server's initial display configuration policy, as
++     * every other Mir platform does when it creates its display.  This one
++     * ignored it, so with an external monitor already attached at startup
++     * both outputs began at +0+0 whatever --display-config said.  The nested
++     * shell connected at once and created its surface for the monitor at
++     * +0+0, then laid the monitor out beside the phone at +1080+0; the
++     * system compositor moved the output but not the shell's surface, and
++     * the monitor showed the desktop shifted left by the phone's width until
++     * the next hotplug.  Starting from the policy's layout (side by side by
++     * default) means the shell's first surfaces are already in place.
++     */
++    if (initial_conf_policy)
++    {
++        auto conf = display->configuration();
++        initial_conf_policy->apply_to(*conf);
++        display->configure(*conf);
++    }
++    return display;
+ }
+ 
+ mg::NativeDisplayPlatform* mga::HwcPlatform::native_display_platform()

@@ -1,0 +1,352 @@
+diff --git a/src/service/player_implementation.cpp b/src/service/player_implementation.cpp
+index e695684..a25d63a 100644
+--- a/src/service/player_implementation.cpp
++++ b/src/service/player_implementation.cpp
+@@ -377,7 +377,7 @@ PlayerImplementationPrivate::PlayerImplementationPrivate(
+     });
+ 
+     QObject::connect(power_state_controller.data(),
+-                     &power::StateController::systemStateAcquired,
++                     &power::StateController::systemStateReleased,
+                      q, [](media::power::SystemState state)
+     {
+         MH_INFO() << "Released system state:" << state;
+diff --git a/src/service/power/state_controller.cpp b/src/service/power/state_controller.cpp
+index 6729496..6d78248 100644
+--- a/src/service/power/state_controller.cpp
++++ b/src/service/power/state_controller.cpp
+@@ -49,134 +49,189 @@ uint qHash(SystemState state, uint seed) {
+     return ::qHash(static_cast<uint>(state), seed);
+ }
+ 
++/*
++ * Both interfaces below hold a lock in a remote service that is only known by
++ * the id/cookie the service returns.  The calls are asynchronous, so a release
++ * can arrive while the request is still in flight.  The original code looked
++ * the id up at release time, found none ("was never requested"), did nothing,
++ * and then stored the id when the reply came in -- a lock that nothing would
++ * ever clear.  For the system state that kept repowerd from ever suspending
++ * again until media-hub restarted; it happens whenever a client disconnects
++ * or stops right after starting playback.
++ *
++ * So instead each interface records what is *wanted*, allows one call in
++ * flight at a time, and when that call completes brings the service in line
++ * with whatever is wanted by then.
++ */
+ class DisplayInterface {
+ public:
+-    DisplayInterface():
++    using Callback = std::function<void(void)>;
++
++    DisplayInterface(const Callback &acquired, const Callback &released):
+         m_interface(QStringLiteral("com.canonical.Unity.Screen"),
+                     QStringLiteral("/com/canonical/Unity/Screen"),
+                     QStringLiteral("com.canonical.Unity.Screen"),
+                     QDBusConnection::systemBus()),
+-        m_requestId(-1)
++        m_acquired(acquired),
++        m_released(released)
+     {
+     }
+ 
+-    using Callback = std::function<void(void)>;
+-
+-    void requestDisplayOn(const Callback &cb) {
+-        if (m_requestId >= 0) {
+-            MH_ERROR("Display ON was already requested!");
+-            return;
+-        }
+-
+-        QDBusPendingCall call = m_interface.asyncCall("keepDisplayOn");
+-        auto watcher = new QDBusPendingCallWatcher(call);
+-        QObject::connect(watcher, &QDBusPendingCallWatcher::finished,
+-                         [this, cb](QDBusPendingCallWatcher *watcher) {
+-            QDBusPendingReply<int32_t> reply = *watcher;
+-            if (reply.isError()) {
+-                MH_ERROR() << "Error requesting display ON:" << reply.error().message();
+-            } else {
+-                m_requestId = reply.value();
+-                cb();
+-            }
+-            watcher->deleteLater();
+-        });
++    void requestDisplayOn() {
++        m_wanted = true;
++        sync();
+     }
+ 
+-    void releaseDisplayOn(const Callback &cb) {
+-        if (m_requestId < 0) {
+-            MH_WARNING("Display ON was not requested!");
+-            return;
+-        }
++    void releaseDisplayOn() {
++        m_wanted = false;
++        sync();
++    }
+ 
+-        QDBusPendingCall call = m_interface.asyncCall("removeDisplayOnRequest", m_requestId);
+-        auto watcher = new QDBusPendingCallWatcher(call);
+-        QObject::connect(watcher, &QDBusPendingCallWatcher::finished,
+-                         [this, cb](QDBusPendingCallWatcher *watcher) {
+-            QDBusPendingReply<void> reply = *watcher;
+-            if (reply.isError()) {
+-                MH_ERROR() << "Error releasing display ON:" << reply.error().message();
+-            } else {
++private:
++    void sync() {
++        if (m_busy) return;
++
++        if (m_wanted && m_requestId < 0) {
++            m_busy = true;
++            QDBusPendingCall call = m_interface.asyncCall("keepDisplayOn");
++            auto watcher = new QDBusPendingCallWatcher(call);
++            QObject::connect(watcher, &QDBusPendingCallWatcher::finished,
++                             [this](QDBusPendingCallWatcher *watcher) {
++                QDBusPendingReply<int32_t> reply = *watcher;
++                watcher->deleteLater();
++                m_busy = false;
++                if (reply.isError()) {
++                    // Not retried: a missing service would make this spin.
++                    MH_ERROR() << "Error requesting display ON:" << reply.error().message();
++                    return;
++                }
++                m_requestId = reply.value();
++                m_acquired();
++                sync();
++            });
++        } else if (!m_wanted && m_requestId >= 0) {
++            m_busy = true;
++            QDBusPendingCall call = m_interface.asyncCall("removeDisplayOnRequest", m_requestId);
++            auto watcher = new QDBusPendingCallWatcher(call);
++            QObject::connect(watcher, &QDBusPendingCallWatcher::finished,
++                             [this](QDBusPendingCallWatcher *watcher) {
++                QDBusPendingReply<void> reply = *watcher;
++                watcher->deleteLater();
++                m_busy = false;
++                if (reply.isError()) {
++                    MH_ERROR() << "Error releasing display ON:" << reply.error().message();
++                }
++                // Forget the id either way: one the service rejected cannot
++                // be released later either.
+                 m_requestId = -1;
+-                cb();
+-            }
+-            watcher->deleteLater();
+-        });
++                m_released();
++                sync();
++            });
++        }
+     }
+ 
+-private:
+     QDBusInterface m_interface;
+-    int32_t m_requestId;
++    Callback m_acquired;
++    Callback m_released;
++    int32_t m_requestId = -1;
++    bool m_wanted = false;
++    bool m_busy = false;
+ };
+ 
+ class SystemStateInterface {
+ public:
+-    SystemStateInterface():
++    using Callback = std::function<void(SystemState state)>;
++
++    SystemStateInterface(const Callback &acquired, const Callback &released):
+         m_interface(QStringLiteral("com.lomiri.Repowerd"),
+                     QStringLiteral("/com/lomiri/Repowerd"),
+                     QStringLiteral("com.lomiri.Repowerd"),
+-                    QDBusConnection::systemBus())
++                    QDBusConnection::systemBus()),
++        m_acquired(acquired),
++        m_released(released)
+     {
+     }
+ 
+-    using Callback = std::function<void(SystemState state)>;
+-
+-    void requestSystemState(SystemState state,
+-                            const Callback &cb)
++    void requestSystemState(SystemState state)
+     {
+         MH_TRACE("");
+ 
+         if (state == media::power::SystemState::suspend) {
+             return;
+         }
+-
+-        QDBusPendingCall call =
+-            m_interface.asyncCall("requestSysState",
+-                                  QStringLiteral("media-hub-playback_lock"),
+-                                  static_cast<int32_t>(state));
+-        auto watcher = new QDBusPendingCallWatcher(call);
+-        QObject::connect(watcher, &QDBusPendingCallWatcher::finished,
+-                         [this, state, cb](QDBusPendingCallWatcher *watcher) {
+-            QDBusPendingReply<QString> reply = *watcher;
+-            if (reply.isError()) {
+-                MH_ERROR() << "Error requesting system state:" << reply.error().message();
+-            } else {
+-                m_cookieStore.insert(state, reply.value());
+-                cb(state);
+-            }
+-            watcher->deleteLater();
+-        });
++        m_locks[state].wanted = true;
++        sync(state);
+     }
+ 
+-    void releaseSystemState(media::power::SystemState state,
+-                            const Callback &cb)
++    void releaseSystemState(media::power::SystemState state)
+     {
+         if (state == media::power::SystemState::suspend) {
+             return;
+         }
+-        const auto i = m_cookieStore.find(state);
+-        if (i == m_cookieStore.end()) {
+-            return; // state was never requested
+-        }
+-
+-        QDBusPendingCall call = m_interface.asyncCall("clearSysState", i.value());
+-        auto watcher = new QDBusPendingCallWatcher(call);
+-        QObject::connect(watcher, &QDBusPendingCallWatcher::finished,
+-                         [this, state, cb](QDBusPendingCallWatcher *watcher) {
+-            QDBusPendingReply<void> reply = *watcher;
+-            if (reply.isError()) {
+-                MH_ERROR() << "Error releasing system state:" << reply.error().message();
+-            } else {
+-                m_cookieStore.remove(state);
+-                cb(state);
+-            }
+-            watcher->deleteLater();
+-        });
++        m_locks[state].wanted = false;
++        sync(state);
+     }
+ 
+ private:
++    struct Lock {
++        QString cookie;
++        bool wanted = false;
++        bool busy = false;
++    };
++
++    void sync(SystemState state)
++    {
++        Lock &lock = m_locks[state];
++        if (lock.busy) return;
++
++        if (lock.wanted && lock.cookie.isEmpty()) {
++            lock.busy = true;
++            QDBusPendingCall call =
++                m_interface.asyncCall("requestSysState",
++                                      QStringLiteral("media-hub-playback_lock"),
++                                      static_cast<int32_t>(state));
++            auto watcher = new QDBusPendingCallWatcher(call);
++            QObject::connect(watcher, &QDBusPendingCallWatcher::finished,
++                             [this, state](QDBusPendingCallWatcher *watcher) {
++                QDBusPendingReply<QString> reply = *watcher;
++                watcher->deleteLater();
++                Lock &lock = m_locks[state];
++                lock.busy = false;
++                if (reply.isError()) {
++                    // Not retried: a missing service would make this spin.
++                    MH_ERROR() << "Error requesting system state:" << reply.error().message();
++                    return;
++                }
++                lock.cookie = reply.value();
++                m_acquired(state);
++                sync(state);
++            });
++        } else if (!lock.wanted && !lock.cookie.isEmpty()) {
++            lock.busy = true;
++            QDBusPendingCall call = m_interface.asyncCall("clearSysState", lock.cookie);
++            auto watcher = new QDBusPendingCallWatcher(call);
++            QObject::connect(watcher, &QDBusPendingCallWatcher::finished,
++                             [this, state](QDBusPendingCallWatcher *watcher) {
++                QDBusPendingReply<void> reply = *watcher;
++                watcher->deleteLater();
++                Lock &lock = m_locks[state];
++                lock.busy = false;
++                if (reply.isError()) {
++                    MH_ERROR() << "Error releasing system state:" << reply.error().message();
++                }
++                // Forget the cookie either way: one repowerd rejected cannot
++                // be cleared later either.
++                lock.cookie.clear();
++                m_released(state);
++                sync(state);
++            });
++        }
++    }
++
+     QDBusInterface m_interface;
+-    QHash<SystemState, QString> m_cookieStore;
++    Callback m_acquired;
++    Callback m_released;
++    QHash<SystemState, Lock> m_locks;
+ };
+ 
+ class StateControllerPrivate {
+@@ -199,16 +254,17 @@ struct CreatableStateController: public StateController
+ 
+ }}} // namespace
+ 
+-StateControllerPrivate::StateControllerPrivate(StateController *q)
++StateControllerPrivate::StateControllerPrivate(StateController *q):
++    m_display([q]() { Q_EMIT q->displayOnAcquired(); },
++              [q]() { Q_EMIT q->displayOnReleased(); }),
++    m_system([q](SystemState state) { Q_EMIT q->systemStateAcquired(state); },
++             [q](SystemState state) { Q_EMIT q->systemStateReleased(state); })
+ {
+     m_displayReleaseTimer.setSingleShot(true);
+     m_displayReleaseTimer.setTimerType(Qt::VeryCoarseTimer);
+     m_displayReleaseTimer.setInterval(DISPLAY_RELEASE_INTERVAL);
+-    m_displayReleaseTimer.callOnTimeout(q, [this, q]() {
+-        auto emitReleaseSignal = [q]() {
+-            Q_EMIT q->displayOnReleased();
+-        };
+-        m_display.releaseDisplayOn(emitReleaseSignal);
++    m_displayReleaseTimer.callOnTimeout(q, [this]() {
++        m_display.releaseDisplayOn();
+     });
+ }
+ 
+@@ -237,9 +293,10 @@ void StateController::requestDisplayOn()
+     Q_D(StateController);
+     if (++d->m_displayLockCount == 1) {
+         MH_INFO("Requesting new display wakelock.");
+-        d->m_display.requestDisplayOn([this]() {
+-            Q_EMIT displayOnAcquired();
+-        });
++        // A release still waiting on the timer would otherwise drop the
++        // display lock while this new request needs it.
++        d->m_displayReleaseTimer.stop();
++        d->m_display.requestDisplayOn();
+     }
+ }
+ 
+@@ -257,9 +314,7 @@ void StateController::requestSystemState(SystemState state)
+     Q_D(StateController);
+     if (++d->m_systemLockCount == 1) {
+         MH_INFO("Requesting new system wakelock.");
+-        d->m_system.requestSystemState(state, [this](SystemState state) {
+-            Q_EMIT systemStateAcquired(state);
+-        });
++        d->m_system.requestSystemState(state);
+     }
+ }
+ 
+@@ -268,8 +323,6 @@ void StateController::releaseSystemState(SystemState state)
+     Q_D(StateController);
+     if (--d->m_systemLockCount == 0) {
+         MH_INFO("Clearing system wakelock.");
+-        d->m_system.releaseSystemState(state, [this](SystemState state) {
+-            Q_EMIT systemStateReleased(state);
+-        });
++        d->m_system.releaseSystemState(state);
+     }
+ }

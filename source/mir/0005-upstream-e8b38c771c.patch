@@ -1,0 +1,22 @@
+From e8b38c771c57f329cce491e17271b0f459827669 Mon Sep 17 00:00:00 2001
+From: William Wold <wm@wmww.sh>
+Date: Thu, 8 Jul 2021 08:37:46 -0700
+Subject: [PATCH] Clearify lock name
+
+---
+ src/server/input/default_input_device_hub.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/server/input/default_input_device_hub.cpp b/src/server/input/default_input_device_hub.cpp
+index ac0f074d3d0..63d6c1d202b 100644
+--- a/src/server/input/default_input_device_hub.cpp
++++ b/src/server/input/default_input_device_hub.cpp
+@@ -104,7 +104,7 @@ void mi::ExternalInputDeviceHub::remove_observer(std::weak_ptr<InputDeviceObserv
+                 std::lock_guard<std::recursive_mutex> lock{data->mutex};
+                 data->observers.remove(observer);
+ 
+-                std::lock_guard<decltype(mutex)> vc_lock{mutex};
++                std::lock_guard<decltype(mutex)> cond_var_lock{mutex};
+                 removed = true;
+                 cv.notify_one();
+             });
