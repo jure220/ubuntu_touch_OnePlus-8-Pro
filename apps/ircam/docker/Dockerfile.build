@@ -1,0 +1,13 @@
+# Cross-toolchain for building the IR-camera app for Ubuntu Touch 24.04 (arm64).
+#
+# Ubuntu 24.04 host image is deliberate: its aarch64 cross-compiler targets
+# glibc 2.39, which is exactly what the phone's rootfs has, so binaries built
+# here run there without any compatibility shims.
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+      make pkg-config file ca-certificates binutils \
+    && rm -rf /var/lib/apt/lists/*
+# Run with -u "$(id -u):$(id -g)" so the output belongs to you.
+WORKDIR /work

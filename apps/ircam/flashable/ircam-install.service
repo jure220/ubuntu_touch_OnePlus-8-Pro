@@ -1,0 +1,15 @@
+# Installs the IR Camera click staged by the recovery zip, once, then removes
+# itself. click install is the same tool OpenStore and `pkcon install-local`
+# use, so the app ends up registered exactly as if installed on the phone.
+[Unit]
+Description=Install the IR Camera app staged by the recovery zip
+ConditionPathExists=/userdata/ircam-install
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'for c in /userdata/ircam-install/*.click; do click install --user=phablet --allow-unauthenticated "$c" || exit 1; done'
+ExecStartPost=/bin/rm -rf /userdata/ircam-install /etc/systemd/system/multi-user.target.wants/ircam-install.service /etc/systemd/system/ircam-install.service
+
+[Install]
+WantedBy=multi-user.target

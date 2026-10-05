@@ -1,0 +1,15 @@
+# Qt5 build environment for the IR-camera app's QML plugin.
+#
+# This is an arm64 image run under qemu emulation, deliberately: the phone has
+# Qt 5.15.13 from Ubuntu 24.04 (libqt5core5t64, i.e. the 64-bit time_t ABI), and
+# building natively against that exact package set removes every cross-compile
+# ABI question. Emulation is slow, but the plugin is small.
+FROM --platform=linux/arm64 ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake pkg-config file \
+      qtbase5-dev qtbase5-dev-tools qtdeclarative5-dev \
+      libqt5quick5 qml-module-qtquick2 \
+    && rm -rf /var/lib/apt/lists/*
+# Run with -u "$(id -u):$(id -g)" so the output belongs to you.
+WORKDIR /work

@@ -32,6 +32,15 @@ port uses the vendor and odm partitions that OxygenOS 13 leaves on the phone.
    image is not signed by OnePlus.
 4. Reboot.
 
+## IR Camera app
+
+The fifth rear camera (the 5 MP colour-filter "photochrom" sensor) is not
+reachable from the stock camera app. The **IR Camera** app opens it, with a
+live viewfinder and manual or automatic exposure. It is on the
+[Releases](https://github.com/jure220/ubuntu_touch_OnePlus-8-Pro/releases) page
+as a click package and as a recovery-flashable zip; source and install notes
+are in [`apps/ircam/`](apps/ircam).
+
 ## How it is built
 
 The zip contains:
@@ -63,6 +72,7 @@ walks through it.
 | Android tree | [`manifests/`](manifests) (local manifests for Halium 14), [`android-patches/`](android-patches) (changes to Halium and AOSP projects) |
 | Device port | [`device-files/payload/`](device-files/payload): systemd units, scripts, udev rules, configs, prebuilt libraries; installed into the rootfs by the boot image |
 | Boot image and zip | [`device-files/`](device-files): `build-boot-payload.sh`, `initramfs-halium-scripts.patch`, `build-release-zip.sh`, the installer |
+| IR Camera app | [`apps/ircam/`](apps/ircam): Camera2 client through libhybris, QML plugin, click and flashable-zip packaging |
 | Mir, mir-android2-platform, qtmir, Qt Quick, media-hub | [`ubuntu/`](ubuntu): patches against the exact package sources, Dockerfiles and build scripts |
 
 ## Security

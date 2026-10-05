@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=IR Camera
+Comment=IR / colour-filter (photochrom) camera
+Keywords=camera;infrared;ir;photochrom;colour filter;
+Exec=./run.sh
+Icon=ircam.svg
+Terminal=false
+Type=Application
+X-Lomiri-Touch=true
+X-Lomiri-Splash-Color=#0d0d0d
+X-Ubuntu-Supported-Orientations=portrait
+X-Lomiri-Supported-Orientations=portrait

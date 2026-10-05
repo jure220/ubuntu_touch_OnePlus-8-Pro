@@ -1,0 +1,54 @@
+#!/sbin/sh
+#
+# IR Camera for Ubuntu Touch on the OnePlus 8 Pro (instantnoodlep) - by Z3PHYR
+#
+# Recovery-flashable installer for the IR Camera click. Recovery cannot run
+# Ubuntu Touch's click tool, so this stages the package on userdata together
+# with a one-shot systemd unit; on the next boot the unit runs
+# `click install` and then deletes itself and the staged package.
+#
+# /etc/systemd/system on Ubuntu Touch is a "synced" writable path backed by
+# /userdata/system-data/etc/systemd/system, so the unit is written there.
+
+OUTFD=$2
+ZIP=$3
+
+ui_print() { echo -e "ui_print $1\nui_print" >&$OUTFD; }
+abort()    { ui_print "!! $1"; exit 1; }
+
+ui_print " "
+ui_print "==========================================="
+ui_print " IR Camera for Ubuntu Touch"
+ui_print " OnePlus 8 Pro - by Z3PHYR"
+ui_print "==========================================="
+ui_print " "
+
+BN=/dev/block/bootdevice/by-name
+[ -d "$BN" ] || BN=/dev/block/by-name
+mkdir -p /data 2>/dev/null
+mountpoint -q /data || mount /data 2>/dev/null
+mountpoint -q /data || mount "$BN/userdata" /data 2>/dev/null
+mountpoint -q /data || abort "could not mount userdata"
+[ -f /data/rootfs.img ] || abort "Ubuntu Touch is not installed (no /data/rootfs.img). Flash the Ubuntu Touch zip first."
+unzip -tq "$ZIP" >/dev/null 2>&1 || abort "zip is corrupted (CRC check failed) - download it again"
+
+ui_print "- staging the app"
+rm -rf /data/ircam-install
+mkdir -p /data/ircam-install || abort "cannot write to userdata"
+unzip -o -q "$ZIP" 'ircam.z3phyr_*.click' -d /data/ircam-install || abort "cannot extract the click"
+ls /data/ircam-install/*.click >/dev/null 2>&1 || abort "no click package in the zip"
+
+ui_print "- adding the one-shot installer"
+U=/data/system-data/etc/systemd/system
+mkdir -p "$U/multi-user.target.wants" || abort "cannot create $U"
+unzip -p "$ZIP" ircam-install.service > "$U/ircam-install.service" || abort "cannot write the unit"
+chmod 644 "$U/ircam-install.service"
+ln -sf /etc/systemd/system/ircam-install.service "$U/multi-user.target.wants/ircam-install.service"
+sync
+
+ui_print " "
+ui_print " Done. The app installs itself during the"
+ui_print " next boot; IR Camera then appears in the"
+ui_print " app drawer."
+ui_print " "
+exit 0

@@ -1,0 +1,16 @@
+{
+    "name": "ircam.z3phyr",
+    "title": "IR Camera",
+    "version": "1.0.0",
+    "description": "Viewfinder and stills for the OnePlus 8 Pro colour-filter (photochrom/IR) camera, which the stock camera app cannot open. Needs the Ubuntu Touch port for the OnePlus 8 Pro by Z3PHYR.",
+    "maintainer": "Z3PHYR <6280638+jure220@users.noreply.github.com>",
+    "framework": "ubuntu-touch-24.04-2.x",
+    "architecture": "arm64",
+    "icon": "ircam.svg",
+    "hooks": {
+        "ircam": {
+            "apparmor": "ircam.apparmor",
+            "desktop": "ircam.desktop"
+        }
+    }
+}
