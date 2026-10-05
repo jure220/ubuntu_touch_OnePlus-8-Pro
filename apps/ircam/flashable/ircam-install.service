@@ -1,6 +1,7 @@
 # Installs the IR Camera click staged by the recovery zip, once, then removes
-# itself. click install is the same tool OpenStore and `pkcon install-local`
-# use, so the app ends up registered exactly as if installed on the phone.
+# itself. click install is what Ubuntu Touch's own click service (used by
+# OpenStore) runs, so the app ends up registered exactly as if installed on
+# the phone.
 [Unit]
 Description=Install the IR Camera app staged by the recovery zip
 ConditionPathExists=/userdata/ircam-install

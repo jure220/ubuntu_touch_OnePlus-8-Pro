@@ -16,15 +16,18 @@ It needs the [Ubuntu Touch port for the OnePlus 8 Pro](https://github.com/jure22
 
 Download from the release page either
 
-* `ircam.z3phyr_<version>_arm64.click` and install it on the phone, in the
+* `ircam.z3phyr_<version>_arm64.click` and install it with Ubuntu Touch's
+  click service (no root needed; this is what OpenStore uses). In the
   Terminal app:
 
-      pkcon install-local --allow-untrusted ~/Downloads/ircam.z3phyr_1.0.0_arm64.click
+      gdbus call --system --dest com.lomiri.click --object-path /com/lomiri/click \
+          --method com.lomiri.click.Install ~/Downloads/ircam.z3phyr_1.0.0_arm64.click
 
   or from a PC over USB (Developer Mode on):
 
       adb push ircam.z3phyr_1.0.0_arm64.click /home/phablet/
-      adb shell pkcon install-local --allow-untrusted /home/phablet/ircam.z3phyr_1.0.0_arm64.click
+      adb shell gdbus call --system --dest com.lomiri.click --object-path /com/lomiri/click \
+          --method com.lomiri.click.Install /home/phablet/ircam.z3phyr_1.0.0_arm64.click
 
 * or `ircam-z3phyr-<version>-flashable.zip` and flash it in recovery
   (OrangeFox) after the Ubuntu Touch zip. Recovery cannot run Ubuntu Touch's
@@ -35,7 +38,8 @@ Download from the release page either
 The app is unconfined (`ircam.apparmor`): it talks to Android's camera service
 over binder through libhybris, which no AppArmor policy group allows.
 
-Uninstall: `click unregister --user=phablet ircam.z3phyr`.
+Uninstall: long-press the icon in the app drawer, or
+`gdbus call --system --dest com.lomiri.click --object-path /com/lomiri/click --method com.lomiri.click.Remove ircam.z3phyr`.
 
 ## Build
 
@@ -115,7 +119,7 @@ use (`jni.h`, `android/native_window.h`, `android/hardware_buffer.h`,
 ```sh
 export HYBRIS_LD_LIBRARY_PATH=/system/lib64:/vendor/lib64:/odm/lib64:/apex/com.android.i18n/lib64
 ircam-shot --list                                     # enumerate
-ircam-shot --id 4 --format jpeg --exposure-ms 200 --iso 1600
+ircam-shot --id 4 --format yuv --exposure-ms 200 --iso 1600     # PNG in ~/Pictures
 ```
 
 Options: `--id N`, `--out DIR` (default `$HOME/Pictures`), `--format
