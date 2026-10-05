@@ -1,0 +1,10 @@
+# Cross-build environment for mir-android2-platform (graphics-android2.so.16)
+FROM mircross:1
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      cmake-extras android-headers-28 \
+      libhardware-dev:arm64 libandroid-properties-dev:arm64 libhybris-dev:arm64 \
+      libdeviceinfo-dev:arm64 mir1-renderer-gl-dev:arm64 libmir1renderer-dev:arm64 \
+      libmir1server-dev:arm64 libmir1platform-dev:arm64 libmir1common-dev:arm64 \
+      libmir1core-dev:arm64 libmir1client-dev:arm64 libmir1al-dev:arm64 \
+ && rm -rf /var/lib/apt/lists/*

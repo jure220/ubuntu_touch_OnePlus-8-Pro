@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ===========================================================================
+  LineageOS repos trimmed by the Halium 14.0 manifest but still required by
+  the OnePlus sm8250 device tree.
+
+    hardware/oplus/sepolicy/qti/SEPolicy.mk:32
+        include device/lineage/sepolicy/libperfmgr/sepolicy.mk
+
+  That include is unconditional, so the board config cannot be parsed
+  without it. Revision matches the Halium manifest default (lineage-21.0),
+  which is also what LineageOS/android @ lineage-21.0 uses for this repo.
+  ===========================================================================
+-->
+<manifest>
+  <project path="device/lineage/sepolicy"
+           name="LineageOS/android_device_lineage_sepolicy"
+           revision="lineage-21.0" />
+  <!-- device/oneplus/sm8250-common/common.mk:442 adds
+       vendor/qcom/opensource/usb/etc to PRODUCT_SOONG_NAMESPACES, and the
+       common tree copies vendor/qcom/opensource/vibrator/excluded-input-devices.xml.
+       Both are trimmed by the Halium manifest. -->
+  <project path="vendor/qcom/opensource/usb"
+           name="LineageOS/android_vendor_qcom_opensource_usb"
+           revision="lineage-21.0" />
+  <project path="vendor/qcom/opensource/vibrator"
+           name="LineageOS/android_vendor_qcom_opensource_vibrator"
+           revision="lineage-21.0" />
+
+  <!-- vendor/lineage/config/BoardConfigKernel.mk:112 builds TOOLS_PATH_OVERRIDE
+       from prebuilts/tools-lineage (PERL5LIB + the kernel toolchain PATH).
+       clone-depth=1 to match LineageOS: it is a prebuilt blob, no history needed. -->
+  <project path="prebuilts/tools-lineage"
+           name="LineageOS/android_prebuilts_tools-lineage"
+           revision="lineage-21.0" clone-depth="1" />
+
+  <!-- hardware/qcom/Android.mk (the os_pickup_aosp.mk guard linkfile) does:
+           ifeq ($(BOARD_USES_QCOM_HARDWARE),true)
+               include $(LOCAL_PATH)/keymaster/Android.mk
+       and kona sets BOARD_USES_QCOM_HARDWARE := true, so this AOSP repo is
+       mandatory. remote="aosp" -> android.googlesource.com, and it picks up
+       that remote's default revision (refs/tags/android-14.0.0_r53). -->
+  <project path="hardware/qcom/keymaster"
+           name="platform/hardware/qcom/keymaster"
+           remote="aosp" />
+
+  <!-- device/oneplus/sm8250-common/common.mk:411 adds telephony-ext to
+       PRODUCT_PACKAGES and :414 adds it to PRODUCT_BOOT_JARS, so
+       platform-bootclasspath fails without it:
+           module platform-bootclasspath missing dependencies: telephony-ext
+       This repo also supplies the other qti-telephony modules common.mk wants
+       (qti-hidl-wrapper -> qti-telephony-hidl-wrapper, qti-utils ->
+       qti-telephony-utils, ims -> ims-ext-common). -->
+  <project path="vendor/codeaurora/telephony"
+           name="LineageOS/android_vendor_codeaurora_telephony"
+           revision="lineage-21.0" />
+
+  <!-- Provides org.lineageos.settings.resources. hardware/oplus's KeyHandler
+       and OplusDoze link against it. Filtering them out of PRODUCT_PACKAGES
+       stops them being INSTALLED but the vendorimage build still compiles
+       them, so the resources package has to exist. It is resources-only,
+       so it does not drag in the wider Java framework. -->
+  <project path="packages/resources/devicesettings"
+           name="LineageOS/android_packages_resources_devicesettings"
+           revision="lineage-21.0" />
+
+</manifest>

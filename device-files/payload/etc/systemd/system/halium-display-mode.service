@@ -1,0 +1,27 @@
+[Unit]
+Description=Set the panel to 1440x3168 @ 120 Hz before the compositor starts
+After=lxc-android-config.service
+# This one DOES gate lightdm, deliberately, and it is the only reason it works.
+# Mir samples the display config once at startup, so the mode has to be in place
+# BEFORE it runs. This is not a violation of "never let optional hardware gate a
+# target": the script is bounded to ~30 s and always exits 0, so the worst case
+# is a slower boot to the ordinary 1080p UI, never a phone with no shell.
+Before=lightdm.service
+
+[Service]
+# Type=oneshot (not simple) so that Before=lightdm.service actually means
+# something -- systemd only considers a oneshot "started" once ExecStart has
+# returned, which is what holds lightdm back until the mode is set.
+#
+# NOT oneshot with a detached "setsid ... &": systemd cleans up the leftover
+# process in the unit's cgroup as soon as ExecStart returns, so the script was
+# killed before doing any work. Tested -- the log file was never even created.
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/halium/halium-display-mode.sh
+# Hard backstop in case lxc-attach itself wedges. On timeout the unit fails, but
+# lightdm is only ordered After us, not dependent on us, so it still starts.
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

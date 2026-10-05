@@ -1,0 +1,21 @@
+[Unit]
+Description=OnePlus 8 Pro alert slider -> Ubuntu Touch ringer mode
+# Needs the system bus and AccountsService to be able to write the profile.
+After=dbus.service accounts-daemon.service
+Wants=accounts-daemon.service
+# Rate-limit keys live in [Unit] on systemd 255, not in [Service].
+StartLimitBurst=5
+StartLimitIntervalSec=60
+# Gates NOTHING on purpose. This is optional hardware: if the slider driver is
+# missing or the daemon dies, the phone must still boot and still have network.
+# (See the halium-wlan.service comment for what happens when optional hardware
+# is allowed to hold up a systemd target.)
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/lib/halium/halium-alert-slider.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

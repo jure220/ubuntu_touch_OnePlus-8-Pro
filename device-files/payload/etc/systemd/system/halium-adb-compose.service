@@ -1,0 +1,14 @@
+[Unit]
+Description=Add adb to the USB gadget alongside RNDIS
+After=usb-moded.service lxc-android-config.service
+# Gates NOTHING, per project rule 3. Type=simple, so its wait loop cannot delay
+# multi-user.target. On any failure it restores the rndis-only gadget so the USB
+# network -- and the SSH path deploy-system.sh uses -- always comes back.
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/halium/halium-adb-compose.sh
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

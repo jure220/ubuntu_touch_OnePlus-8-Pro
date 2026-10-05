@@ -1,0 +1,100 @@
+#!/bin/sh -euf
+# (halium/instantnoodlep) Wrapper around the stock start-android-container.
+#
+# Two additions over the stock script:
+#
+# 1. tmpfs for /linkerconfig and /mnt. The stock LXC config declares only ONE
+#    tmpfs (/dev), which is not enough for Android 14 init:
+#      init: SetupMountNamespaces failed: Read-only file system
+#
+# 2. lxc.cap.drop adds sys_boot. Android init inside the container calls
+#    reboot(); with CAP_SYS_BOOT it reboots the WHOLE PHONE, not just the
+#    container. That burns an A/B slot retry every time and eventually drops
+#    the device into recovery. Dropping the capability makes init's reboot
+#    attempts fail harmlessly. The stock config drops mac_admin/mac_override,
+#    so we repeat those -- -s replaces the value rather than appending.
+#
+# Revert: rm -rf /etc/systemd/system/lxc-android-config.service.d
+
+api_level=$(sed -n "s/^ro.build.version.sdk=//p" /android/system/build.prop)
+
+if [ "$api_level" -le 22 ]; then
+    stage2_env=""; stage2_arg=""
+elif [ "$api_level" -le 25 ]; then
+    stage2_env=""; stage2_arg="--second-stage"
+elif [ "$api_level" -le 28 ]; then
+    stage2_env="INIT_SECOND_STAGE=true"; stage2_arg=""
+else
+    stage2_env=""; stage2_arg="second_stage"
+fi
+
+# --- ONE-SHOT ARMING (instantnoodlep bring-up safety) ---
+# This unit is "static": it has no [Install] section, so systemctl disable does
+# nothing and something else pulls it in via Requires=. If the container reboots
+# the phone, it would restart here on every boot and burn all 7 A/B retries until
+# the bootloader drops to recovery -- which needs the user at a fastboot cable.
+#
+# So consume the arming flag BEFORE handing control to Android init. A start
+# therefore happens exactly once per explicit `touch /userdata/.enable-android`,
+# and a reboot loop is structurally impossible.
+# The one-shot arming existed because the container used to reset the phone.
+# That is fixed (SLPI firmware_mnt, persist/WLAN, and the USB gadget conflict),
+# and the container has started cleanly many times since. So when
+# /userdata/.android-autostart exists the flag is PRESERVED and the container
+# comes up on every boot -- which is what the UI needs.
+# Kill switch: rm /userdata/.android-autostart  (back to one-shot), or
+#              touch /userdata/.no-dynparts     (disable the whole chain).
+if [ ! -e /userdata/.android-autostart ]; then
+    rm -f /userdata/.enable-android
+fi
+sync
+echo "@@@@ HALIUM: arming flag consumed, launching android init @@@@" > /dev/kmsg
+
+# DIAGNOSTIC (temporary): an empty file is bound over init.qcom.usb.rc so
+# Android init never runs its "on boot" USB block:
+#     mount configfs none /config
+#     mkdir /config/usb_gadget/g1 ...
+#     write /config/usb_gadget/g1/strings/0x409/serialnumber ...
+# configfs is a kernel singleton, so that writes into the SAME live g1
+# gadget usb_moded owns for RNDIS. The reset lands exactly on this action,
+# with no panic and an empty pstore (cold reset). This only TESTS the
+# hypothesis -- the real fix is to stop the container owning USB, not to
+# blank a vendor rc file.
+# time_daemon is STUBBED, and that is what fixes the 1970 clock. Qualcomm's
+# time_daemon pushes the modem/RTC time-of-day into the SYSTEM clock; this phone
+# has no writable RTC and no time source, so it pushes the epoch over whatever
+# halium-time.sh restored. Proven: with the clock correctly set to
+# 2026-09-01 17:33, `setprop ctl.restart time_daemon` moved it to 1970 within
+# seconds. Ordering the restore later cannot win that race; removing the writer
+# can.
+#
+# The usual empty-rc bind does NOT work here. time_daemon is declared as a
+# `service` in THREE files: init.time_daemon.rc (small) but ALSO
+# vendor/etc/init/hw/init.qcom.rc and init.wlan.qcom.rc, which are essential and
+# must not be blanked. Blanking only the small one leaves it running -- verified
+# on a reboot. So the BINARY is replaced with a stub that sleeps forever.
+#
+# The stub must never exit: time_daemon is `class main`, so init restarts it if
+# it exits. Dropping CAP_SYS_TIME instead was rejected for the same reason -- if
+# time_daemon aborts on EPERM, init restart-loops it, and a restart loop already
+# took this device to 29k threads and an OOM wedge once.
+# Revert: drop the matching -s line.
+#
+# NOTE: never put comments between the \-continued -s lines below; they
+# become arguments and truncate the command (lxc then execs /sbin/init).
+# shellcheck disable=SC2086
+exec /usr/bin/lxc-start -n android -F \
+    -s "lxc.cap.drop=mac_admin mac_override sys_boot" \
+    -s "lxc.mount.entry=tmpfs linkerconfig tmpfs nosuid,nodev,mode=0755 0 0" \
+    -s "lxc.mount.entry=tmpfs mnt tmpfs nosuid,nodev,mode=0755 0 0" \
+    -s "lxc.mount.entry=/run/halium-persist mnt/vendor/persist none bind,rw,create=dir,optional 0 0" \
+    -s "lxc.mount.entry=/usr/lib/halium/bin/empty.rc vendor/etc/init/hw/init.qcom.usb.rc none bind,ro 0 0" \
+    -s "lxc.mount.entry=/usr/lib/halium/bin/time_daemon.stub vendor/bin/time_daemon none bind,ro 0 0" \
+    -s "lxc.mount.entry=/usr/lib/halium/bin/seccomp/qspm.policy vendor/etc/seccomp_policy/qspm.policy none bind,ro 0 0" \
+    -s "lxc.mount.entry=/usr/lib/halium/bin/vndservicemanager vendor/bin/vndservicemanager none bind,ro 0 0" \
+    -- \
+    /system/bin/env -i \
+        PATH=/product/bin:/apex/com.android.runtime/bin:/apex/com.android.art/bin:/sbin:/system/sbin:/system_ext/bin:/system/bin:/system/xbin:/odm/bin:/vendor/bin:/vendor/xbin \
+        INIT_STARTED_AT=0 \
+        $stage2_env \
+        /init $stage2_arg

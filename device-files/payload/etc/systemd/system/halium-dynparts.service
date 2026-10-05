@@ -1,0 +1,19 @@
+[Unit]
+Description=Map Android dynamic partitions and mount /vendor
+DefaultDependencies=no
+After=local-fs.target
+Before=lxc-android-config.service android-set-boot-completion-property.service
+ConditionPathExists=/dev/sda14
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/halium/halium-dynparts.sh
+# Never let this stall or fail the boot.
+TimeoutStartSec=120
+SuccessExitStatus=0 1
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+FROM qtmircross:5
+ENV DEBIAN_FRONTEND=noninteractive
+# the amd64 generator needs its own amd64 runtime deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libxml++2.6-2v5:amd64 \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /build

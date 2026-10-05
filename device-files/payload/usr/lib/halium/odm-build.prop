@@ -1,0 +1,12 @@
+# Installed as /odm/etc/build.prop by halium-dynparts.sh (step 7).
+#
+# The stock vendor partition describes Qualcomm's reference board
+# (QUALCOMM / qti / "Kona for arm64"). OxygenOS corrects that from odm, whose
+# build.prop imports my_manifest/build.prop; Halium mounts neither, so these
+# lines take their place. device and name are left at "kona" on purpose.
+ro.product.vendor.brand=OnePlus
+ro.product.vendor.manufacturer=OnePlus
+ro.product.vendor.model=OnePlus 8 Pro
+
+# Shown as "Device build description" in Settings > About > OS Build Details.
+ro.build.display.id=Ubuntu Touch 24.04-2.x for OnePlus 8 Pro by Z3PHYR, v1.0

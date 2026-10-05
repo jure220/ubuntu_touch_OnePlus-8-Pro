@@ -1,0 +1,19 @@
+[Unit]
+Description=Persist wall clock across reboots (RTC is read-only on this device)
+# Plain ordering only. The first version used DefaultDependencies=no with
+# Before=sysinit.target, which is the shape that creates early-boot ordering
+# hazards; there is no need to run that early.
+# The Android container sets the system clock itself at startup (it has no RTC
+# to read, so it lands on 1970) and that overwrites an earlier restore. Run
+# after the container, exactly like halium-slot-keepalive.
+After=local-fs.target systemd-timesyncd.service android-service.service lxc@android.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/halium/halium-time.sh restore
+ExecStop=/usr/lib/halium/halium-time.sh save
+TimeoutSec=30
+
+[Install]
+WantedBy=multi-user.target

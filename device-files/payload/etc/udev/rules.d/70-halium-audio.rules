@@ -1,0 +1,51 @@
+# instantnoodlep: give the Qualcomm audio nodes the ownership the device's own
+# ueventd.rc asks for.
+#
+# WHY THIS EXISTS
+# ---------------
+# /android/vendor/ueventd.rc and /android/system/etc/ueventd.rc contain lines like
+#
+#     /dev/msm_audio_cal        0660   system     audio
+#     /dev/avtimer              0660   system     audio
+#
+# On Android, ueventd applies those. Under Halium the nodes are created by the host
+# kernel and handled by the host's udev, which ships no rule for Qualcomm-specific
+# misc devices -- so they stay root:root 0600.
+#
+# Nothing inside the Android container notices, because that container is privileged
+# and its services keep CAP_DAC_OVERRIDE (ipacm, for instance, holds fds on /dev/ipa
+# even at 0600 root:root). PulseAudio is the exception: it runs OUTSIDE the container
+# as uid phablet with no capabilities, and loads audio.primary.*.so in-process via
+# libhybris. It therefore could not open /dev/msm_audio_cal, and libacdbloader failed:
+#
+#     E/ACDB-LOADER: ACDB -> Not correctly initialized!
+#
+# Media playback survived on DSP defaults, which is why music and ringtones worked.
+# The voice path did not: without ACDB there is no vocproc calibration, so calls were
+# silent in both directions. With this rule in place the same start logs
+# AUDIO_SET_AUDPROC_CAL / AUDIO_SET_AFE_CAL / send_hw_delay and zero ACDB errors.
+#
+# Group "audio" is gid 1005 here (Android's own audio gid) and phablet is a member,
+# so 0660 with group audio is what grants access; OWNER="system" just matches ueventd.
+#
+# Scope is deliberately limited to audio nodes. The same class of mismatch exists for
+# ~60 other nodes (see doc/ueventd-audit.sh), but those are reached only from inside
+# the privileged container, so changing them buys nothing and only adds risk.
+
+ACTION=="add|change", KERNEL=="msm_audio_cal",   OWNER="system", GROUP="audio", MODE="0660"
+ACTION=="add|change", KERNEL=="avtimer",         OWNER="system", GROUP="audio", MODE="0660"
+ACTION=="add|change", KERNEL=="msm_rtac",        OWNER="system", GROUP="audio", MODE="0660"
+ACTION=="add|change", KERNEL=="msm_hweffects",   OWNER="system", GROUP="audio", MODE="0660"
+ACTION=="add|change", KERNEL=="audio_slimslave", OWNER="system", GROUP="audio", MODE="0660"
+ACTION=="add|change", KERNEL=="wcd_dsp0_control", OWNER="system", GROUP="audio", MODE="0660"
+ACTION=="add|change", KERNEL=="wcd-dsp-glink",   OWNER="system", GROUP="audio", MODE="0660"
+
+# i2c bus of the tfa98xx smart amplifier; ueventd assigns it to system:audio.
+ACTION=="add|change", KERNEL=="i2c-7",           OWNER="system", GROUP="audio", MODE="0660"
+
+# Legacy per-codec nodes. Unused by PulseAudio, listed by ueventd as system:audio,
+# harmless to align and it keeps the audit clean.
+ACTION=="add|change", KERNEL=="msm_aac|msm_aac_in|msm_alac|msm_ape|msm_multi_aac", OWNER="system", GROUP="audio", MODE="0660"
+ACTION=="add|change", KERNEL=="msm_amrnb|msm_amrnb_in|msm_amrwb|msm_amrwb_in|msm_amrwbplus", OWNER="system", GROUP="audio", MODE="0660"
+ACTION=="add|change", KERNEL=="msm_evrc|msm_evrc_in|msm_qcelp|msm_qcelp_in", OWNER="system", GROUP="audio", MODE="0660"
+ACTION=="add|change", KERNEL=="msm_wma|msm_wmapro", OWNER="system", GROUP="audio", MODE="0660"

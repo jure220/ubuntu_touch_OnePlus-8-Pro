@@ -1,0 +1,43 @@
+# Cross-build qtmir for arm64 from an amd64 host.
+# Rationale: gcc segfaults (cc1plus / lto1) under qemu-user emulation -- three
+# separate ICEs at different files and stages, including at -j1 -- so the
+# compiler must run natively.
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+COPY ubports.gpg /etc/apt/trusted.gpg.d/ubports.gpg
+RUN rm -f /etc/apt/sources.list.d/ubuntu.sources && \
+    printf 'Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: noble noble-updates noble-backports noble-security\nComponents: main universe restricted multiverse\nArchitectures: amd64\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' > /etc/apt/sources.list.d/amd64.sources && \
+    printf 'Types: deb\nURIs: http://ports.ubuntu.com/ubuntu-ports/\nSuites: noble noble-updates noble-backports noble-security\nComponents: main universe restricted multiverse\nArchitectures: arm64\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' > /etc/apt/sources.list.d/arm64.sources && \
+    printf 'deb [arch=arm64] http://repo.ubports.com/ 24.04-1.x main\n' > /etc/apt/sources.list.d/ubports.list && \
+    dpkg --add-architecture arm64 && apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential crossbuild-essential-arm64 cmake pkg-config \
+        devscripts equivs dpkg-dev fakeroot ca-certificates quilt python3 \
+        qtbase5-dev-tools qtchooser qt5-qmake cmake-extras googletest && \
+    rm -rf /var/lib/apt/lists/*
+
+# Two arch:all packages are not co-installable as :arm64 because they lack
+# Multi-Arch: foreign, which blocks the whole build-dep set. Neither is used by
+# anything we compile -- they arrive via the lomiri-app-launch / content-hub
+# dependency chains -- so satisfy them with equivs stubs.
+RUN apt-get update && \
+    printf 'Section: misc\nPriority: optional\nStandards-Version: 3.9.2\nPackage: python3-apparmor-click\nVersion: 0.5.1~20251014065953.3~3604092+ubports24.04.1\nArchitecture: arm64\nDescription: stub to satisfy a cross-build dependency\n' > /tmp/a.ctl && \
+    printf 'Section: misc\nPriority: optional\nStandards-Version: 3.9.2\nPackage: session-migration\nVersion: 99\nArchitecture: arm64\nDescription: stub to satisfy a cross-build dependency\n' > /tmp/b.ctl && \
+    cd /tmp && equivs-build --arch arm64 a.ctl && equivs-build --arch arm64 b.ctl && \
+    dpkg -i /tmp/python3-apparmor-click_*_arm64.deb /tmp/session-migration_*_arm64.deb && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install the arm64 build dependencies explicitly rather than via
+# mk-build-deps, which swallows apt's diagnostics on failure.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      liblomiri-content-hub-dev:arm64 libfontconfig1-dev:arm64 libgles2-mesa-dev:arm64 \
+      libglib2.0-dev:arm64 libgsettings-qt-dev:arm64 libgtest-dev:arm64 liblttng-ust-dev:arm64 \
+      libmir1al-dev:arm64 libmir1common-dev:arm64 libmir1server-dev:arm64 libmtdev-dev:arm64 \
+      libprocess-cpp-dev:arm64 libqt5sensors5-dev:arm64 libqtdbusmock1-dev:arm64 \
+      libqtdbustest1-dev:arm64 liblomiri-app-launch-dev:arm64 libudev-dev:arm64 \
+      liblomiri-api-dev:arm64 liblomiri-url-dispatcher-dev:arm64 libxkbcommon-dev:arm64 \
+      libxrender-dev:arm64 mir1-renderer-gl-dev:arm64 mir1test-dev:arm64 qtbase5-dev:arm64 \
+      qtbase5-private-dev:arm64 qtdeclarative5-dev:arm64 qtdeclarative5-private-dev:arm64 \
+      uuid-dev:arm64 libboost-filesystem-dev:arm64 libboost-system-dev:arm64 \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /build

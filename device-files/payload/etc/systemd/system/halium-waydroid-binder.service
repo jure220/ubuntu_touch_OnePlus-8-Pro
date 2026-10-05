@@ -1,0 +1,16 @@
+[Unit]
+Description=Waydroid kernel prerequisites (binder domain + xt_CHECKSUM)
+# /dev/binderfs is mounted by the time local-fs is up.
+After=local-fs.target
+# Must be in place before waydroid tries to start its container.
+Before=waydroid-container.service
+# Gates nothing else: if this fails, only Waydroid is affected.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /usr/lib/halium/halium-waydroid-binder.sh
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,77 @@
+# system/core
+# base: 46cf8beed7bdee93afca71fc22cf6e716a59b5bd (halium) fastboot: don't request AIDL HALs for UBports recovery
+# apply from the tree root: git -C system/core apply $PWD/<this file>
+diff --git a/rootdir/init.rc b/rootdir/init.rc
+index bfc91ec..225efce 100644
+--- a/rootdir/init.rc
++++ b/rootdir/init.rc
+@@ -502,28 +502,52 @@ on init
+ import /system/etc/init/hw/init.boringssl.${ro.zygote}.rc
+ 
+ service boringssl_self_test32 /system/bin/boringssl_self_test32
+-    reboot_on_failure reboot,boringssl-self-check-failed
++    # HALIUM(instantnoodlep): reboot_on_failure disabled for bring-up.
++    # Android init holds CAP_SYS_BOOT, so a failure here reboots the WHOLE
++    # PHONE (not just the container) and burns an A/B retry. These checks are
++    # meaningless under Halium: storage and /data belong to Ubuntu Touch, and
++    # the apex self-tests exec from /apex/... which only exists once apexd has
++    # mounted the apexes. Failing loudly in the log is what we want here.
++    #reboot_on_failure reboot,boringssl-self-check-failed
+     stdio_to_kmsg
+     # Explicitly specify that boringssl_self_test32 doesn't require any capabilities
+     capabilities
+     user nobody
+ 
+ service boringssl_self_test64 /system/bin/boringssl_self_test64
+-    reboot_on_failure reboot,boringssl-self-check-failed
++    # HALIUM(instantnoodlep): reboot_on_failure disabled for bring-up.
++    # Android init holds CAP_SYS_BOOT, so a failure here reboots the WHOLE
++    # PHONE (not just the container) and burns an A/B retry. These checks are
++    # meaningless under Halium: storage and /data belong to Ubuntu Touch, and
++    # the apex self-tests exec from /apex/... which only exists once apexd has
++    # mounted the apexes. Failing loudly in the log is what we want here.
++    #reboot_on_failure reboot,boringssl-self-check-failed
+     stdio_to_kmsg
+     # Explicitly specify that boringssl_self_test64 doesn't require any capabilities
+     capabilities
+     user nobody
+ 
+ service boringssl_self_test_apex32 /apex/com.android.conscrypt/bin/boringssl_self_test32
+-    reboot_on_failure reboot,boringssl-self-check-failed
++    # HALIUM(instantnoodlep): reboot_on_failure disabled for bring-up.
++    # Android init holds CAP_SYS_BOOT, so a failure here reboots the WHOLE
++    # PHONE (not just the container) and burns an A/B retry. These checks are
++    # meaningless under Halium: storage and /data belong to Ubuntu Touch, and
++    # the apex self-tests exec from /apex/... which only exists once apexd has
++    # mounted the apexes. Failing loudly in the log is what we want here.
++    #reboot_on_failure reboot,boringssl-self-check-failed
+     stdio_to_kmsg
+     # Explicitly specify that boringssl_self_test_apex32 doesn't require any capabilities
+     capabilities
+     user nobody
+ 
+ service boringssl_self_test_apex64 /apex/com.android.conscrypt/bin/boringssl_self_test64
+-    reboot_on_failure reboot,boringssl-self-check-failed
++    # HALIUM(instantnoodlep): reboot_on_failure disabled for bring-up.
++    # Android init holds CAP_SYS_BOOT, so a failure here reboots the WHOLE
++    # PHONE (not just the container) and burns an A/B retry. These checks are
++    # meaningless under Halium: storage and /data belong to Ubuntu Touch, and
++    # the apex self-tests exec from /apex/... which only exists once apexd has
++    # mounted the apexes. Failing loudly in the log is what we want here.
++    #reboot_on_failure reboot,boringssl-self-check-failed
+     stdio_to_kmsg
+     # Explicitly specify that boringssl_self_test_apex64 doesn't require any capabilities
+     capabilities
+@@ -1101,7 +1125,11 @@ on zygote-start
+     # wait_for_prop odsign.verification.done 1
+ 
+     # A/B update verifier that marks a successful boot.
+-    exec_start update_verifier
++    # Halium: update_verifier is part of the A/B OTA flow, which does not exist
++    # here. Inside the LXC container it finds no valid update state and calls
++    # sys.powerctl=reboot, which tears the whole container down in a loop:
++    #   init: Received sys.powerctl='reboot' from pid: N (/system/bin/update_verifier)
++    # exec_start update_verifier
+     start statsd
+     start netd
+     start zygote

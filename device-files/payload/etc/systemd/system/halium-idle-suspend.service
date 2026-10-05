@@ -1,0 +1,15 @@
+[Unit]
+Description=Suspend when the screen has been off (repowerd cannot on this kernel)
+Documentation=file:///usr/lib/halium/halium-idle-suspend.sh
+After=repowerd.service systemd-logind.service
+Wants=repowerd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/halium/halium-idle-suspend.sh
+Restart=on-failure
+RestartSec=30
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

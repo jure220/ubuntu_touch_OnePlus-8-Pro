@@ -1,0 +1,15 @@
+[Unit]
+Description=Keep the A/B boot slot from being condemned by the bootloader
+# Ordered after the Android container (which owns the boot_control HAL) but NOT
+# after multi-user.target: combining After=multi-user.target with
+# WantedBy=multi-user.target leaves the unit deferred and it never runs.
+After=android-service.service lxc@android.service network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/halium/halium-slot-keepalive.sh
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

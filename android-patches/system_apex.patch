@@ -1,0 +1,37 @@
+# system/apex
+# base: 6267b2ecf216d9dd7a479cb928971b7fba0bef58 (halium) don't run restorecon on apex paths
+# apply from the tree root: git -C system/apex apply $PWD/<this file>
+diff --git a/apexd/apexd.rc b/apexd/apexd.rc
+index af07a1b..452d135 100644
+--- a/apexd/apexd.rc
++++ b/apexd/apexd.rc
+@@ -5,7 +5,13 @@ service apexd /system/bin/apexd
+     group system
+     oneshot
+     disabled # does not start with the core class
+-    reboot_on_failure reboot,apexd-failed
++    # HALIUM(instantnoodlep): reboot_on_failure disabled for bring-up.
++    # Android init holds CAP_SYS_BOOT, so a failure here reboots the WHOLE
++    # PHONE (not just the container) and burns an A/B retry. These checks are
++    # meaningless under Halium: storage and /data belong to Ubuntu Touch, and
++    # the apex self-tests exec from /apex/... which only exists once apexd has
++    # mounted the apexes. Failing loudly in the log is what we want here.
++    #reboot_on_failure reboot,apexd-failed
+     # CAP_CHOWN, CAP_DAC_OVERRIDE, CAP_DAC_READ_SEARCH required for apexdata snapshot & restore
+     # CAP_SYS_ADMIN is required to access device-mapper and to use mount syscall
+     capabilities CHOWN DAC_OVERRIDE DAC_READ_SEARCH FOWNER SYS_ADMIN
+@@ -15,7 +21,13 @@ service apexd-bootstrap /system/bin/apexd --bootstrap
+     group system
+     oneshot
+     disabled
+-    reboot_on_failure reboot,bootloader,bootstrap-apexd-failed
++    # HALIUM(instantnoodlep): reboot_on_failure disabled for bring-up.
++    # Android init holds CAP_SYS_BOOT, so a failure here reboots the WHOLE
++    # PHONE (not just the container) and burns an A/B retry. These checks are
++    # meaningless under Halium: storage and /data belong to Ubuntu Touch, and
++    # the apex self-tests exec from /apex/... which only exists once apexd has
++    # mounted the apexes. Failing loudly in the log is what we want here.
++    #reboot_on_failure reboot,bootloader,bootstrap-apexd-failed
+     # CAP_SYS_ADMIN is required to access device-mapper and to use mount syscall
+     # apexd-bootstrap doesn't manage apexdata snapshot & restore, hence no need for other capabilities.
+     capabilities SYS_ADMIN

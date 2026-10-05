@@ -1,0 +1,17 @@
+FROM qtmircross:4
+ENV DEBIAN_FRONTEND=noninteractive
+# /usr/bin/mir1_wayland_generator comes from libmir1wayland-bin:arm64 and is an
+# aarch64 binary, but the build RUNS it on the amd64 build host to generate
+# wayland protocol wrappers -> "Exec format error" (make Error 126).
+# Its output is plain C++ source, i.e. architecture-independent, so substituting
+# the amd64 build of the same generator is correct. Extract rather than install:
+# installing the amd64 package would drag amd64 Mir libs into the sysroot.
+RUN printf 'deb [arch=amd64] http://repo.ubports.com/ 24.04-2.x main\n' > /etc/apt/sources.list.d/ubports-amd64.list && \
+    apt-get update && \
+    mkdir -p /opt/hosttools && cd /opt/hosttools && \
+    apt-get download libmir1wayland-bin:amd64 && \
+    dpkg-deb -x libmir1wayland-bin_*_amd64.deb /opt/hosttools/x && \
+    cp /opt/hosttools/x/usr/bin/mir1_wayland_generator /usr/bin/mir1_wayland_generator && \
+    rm -f /etc/apt/sources.list.d/ubports-amd64.list && apt-get update && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /build

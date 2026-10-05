@@ -1,0 +1,19 @@
+# system/vold
+# base: 1d5a7f1490fb650a8b68cb91087b2ddeb4feeaaa (halium) do not attempt to mount partitions with metadata encryption
+# apply from the tree root: git -C system/vold apply $PWD/<this file>
+diff --git a/vold.rc b/vold.rc
+index bf72b0c..f89a3c1 100644
+--- a/vold.rc
++++ b/vold.rc
+@@ -7,4 +7,10 @@ service vold /system/bin/vold \
+     shutdown critical
+     group root reserved_disk
+     user root
+-    reboot_on_failure reboot,vold-failed
++    # HALIUM(instantnoodlep): reboot_on_failure disabled for bring-up.
++    # Android init holds CAP_SYS_BOOT, so a failure here reboots the WHOLE
++    # PHONE (not just the container) and burns an A/B retry. These checks are
++    # meaningless under Halium: storage and /data belong to Ubuntu Touch, and
++    # the apex self-tests exec from /apex/... which only exists once apexd has
++    # mounted the apexes. Failing loudly in the log is what we want here.
++    #reboot_on_failure reboot,vold-failed

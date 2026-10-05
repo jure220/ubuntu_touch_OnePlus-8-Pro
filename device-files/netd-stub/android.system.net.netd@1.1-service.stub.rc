@@ -1,0 +1,6 @@
+# Stub INetd so Qualcomm netmgrd can finish starting (see service.cpp).
+# Staged into /odm by halium-dynparts.sh; /odm/bin/hw is on vendor's path.
+service vendor.netd-stub /odm/bin/hw/android.system.net.netd@1.1-service.stub
+    class hal
+    user system
+    group system

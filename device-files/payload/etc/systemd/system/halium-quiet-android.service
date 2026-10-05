@@ -1,0 +1,14 @@
+[Unit]
+Description=Stop Android services that can only crash-loop (prevents OOM)
+After=local-fs.target lxc-android-config.service
+# Gates NOTHING. Project rule 3: never let optional hardware hold a boot
+# hostage. This unit only ever stops things, so it can fail freely.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'setsid /usr/lib/halium/halium-quiet-android.sh >/dev/null 2>&1 < /dev/null &'
+TimeoutStartSec=15
+
+[Install]
+WantedBy=multi-user.target

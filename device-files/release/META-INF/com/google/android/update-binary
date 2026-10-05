@@ -1,0 +1,183 @@
+#!/sbin/sh
+#
+# Ubuntu Touch 24.04-2.x (Halium 14) for the OnePlus 8 Pro -- instantnoodlep
+#
+# Recovery-flashable installer. Invoked by recovery as:
+#     update-binary <api-version> <output-fd> <zipfile>
+#
+# WHAT THIS INSTALLS
+#   boot      <- halium-boot.img. This carries the whole device port: systemd
+#                units, helper scripts, kernel modules, firmware and the
+#                Android-side helpers live in its ramdisk and install
+#                themselves into the rootfs on first boot.
+#   userdata  <- rootfs.img          (stock UBports Ubuntu Touch rootfs, 6 GB)
+#                android-rootfs.img  (the Halium Android 14 system)
+#
+# ODM BLOBS are NOT written here any more.  The boot image builds
+# /userdata/odm-blobs on first boot from this phone's own odm partition
+# (halium-dynparts.sh step 6b); an earlier installer copied the partition raw,
+# which is not what the port needs.  Proprietary OnePlus files are therefore
+# still never shipped, only extracted on the phone they belong to.
+#
+# Images are streamed straight out of the zip (unzip -p), so no 1.2 GB
+# temporary copy is made in recovery's RAM.
+
+OUTFD=$2
+ZIP=$3
+
+ui_print() { echo -e "ui_print $1\nui_print" >&$OUTFD; }
+abort()    { ui_print "!! $1"; exit 1; }
+
+ui_print " "
+ui_print "==========================================="
+ui_print " Ubuntu Touch 24.04-2.x (Halium 14)"
+ui_print " OnePlus 8 Pro - instantnoodlep"
+ui_print " v1.0 - by Z3PHYR"
+ui_print "==========================================="
+ui_print " "
+
+# --- 0. sanity: right phone? -------------------------------------------------
+DEV=$(getprop ro.product.device 2>/dev/null)
+[ -z "$DEV" ] && DEV=$(getprop ro.build.product 2>/dev/null)
+case "$DEV" in
+    instantnoodlep|kona|OnePlus8Pro|"") ;;
+    *) abort "This zip is for the OnePlus 8 Pro. Detected: $DEV" ;;
+esac
+ui_print "- device check ok ($DEV)"
+
+# --- 1. locate partitions ----------------------------------------------------
+BN=/dev/block/bootdevice/by-name
+[ -d "$BN" ] || BN=/dev/block/by-name
+[ -d "$BN" ] || abort "cannot find partition by-name directory"
+
+SLOT=$(getprop ro.boot.slot_suffix 2>/dev/null)
+[ -z "$SLOT" ] && SLOT=_a
+BOOT="$BN/boot$SLOT"
+[ -e "$BOOT" ] || BOOT="$BN/boot"
+[ -e "$BOOT" ] || abort "cannot find the boot partition"
+ui_print "- slot $SLOT, boot = $BOOT"
+
+# --- 2. mount userdata -------------------------------------------------------
+mkdir -p /data 2>/dev/null
+mountpoint -q /data || mount /data 2>/dev/null
+mountpoint -q /data || mount "$BN/userdata" /data 2>/dev/null
+mountpoint -q /data || abort "could not mount userdata (format it in recovery first)"
+
+# The boot image mounts userdata as ext4 only.  OrangeFox's Format Data
+# defaults to f2fs, and on f2fs the phone simply freezes on the boot logo with
+# no output at all, so refuse here where the reason can still be shown.
+FSTYPE=$(awk '$2 == "/data" { print $3; exit }' /proc/mounts)
+[ "$FSTYPE" = ext4 ] || abort "userdata is ${FSTYPE:-unknown}, it must be ext4: Wipe > Format Data, change the file system to ext4, then flash again"
+
+FREE=$(df -k /data 2>/dev/null | tail -1 | awk '{print $4}')
+[ -n "$FREE" ] && [ "$FREE" -lt 8000000 ] 2>/dev/null && \
+    abort "need ~8 GB free on userdata, found $((FREE/1024)) MB"
+ui_print "- userdata mounted"
+
+# Test every member's CRC BEFORE touching anything.  The images are streamed
+# with `unzip -p ... | tar`, and in a pipe unzip's "bad CRC" cannot stop tar,
+# so a corrupted download would otherwise unpack into a silently broken rootfs.
+# (Not hypothetical: the build machine once flipped a single bit in this very
+# member; the build script's read-back check caught it.)
+ui_print "- checking the zip (about a minute)"
+unzip -tq "$ZIP" >/dev/null 2>&1 || abort "zip is corrupted (CRC check failed) - download it again"
+
+# --- 3a. verified boot off ----------------------------------------------------
+# The boot image is not signed with OnePlus's key, so with the stock vbmeta the
+# bootloader refuses it ("current image boot/recovery have been destroyed").
+# Set the two AVB flags that `fastboot --disable-verity --disable-verification`
+# sets: the low byte of the big-endian flags word at offset 120 of the vbmeta
+# header gets bits 0 (hashtree) and 1 (verification).  Only that byte changes;
+# re-flashing the stock vbmeta.img undoes it.
+VBMETA="$BN/vbmeta$SLOT"
+[ -e "$VBMETA" ] || VBMETA="$BN/vbmeta"
+[ -e "$VBMETA" ] || abort "cannot find the vbmeta partition"
+[ "$(dd if="$VBMETA" bs=4 count=1 2>/dev/null)" = AVB0 ] || abort "vbmeta has no AVB header"
+VBF=$(dd if="$VBMETA" bs=1 skip=123 count=1 2>/dev/null | od -An -tu1 | tr -d ' \n')
+[ -n "$VBF" ] || abort "cannot read the vbmeta flags"
+if [ $((VBF & 3)) -ne 3 ]; then
+    printf "\\$(printf '%03o' $((VBF | 3)))" | dd of="$VBMETA" bs=1 seek=123 count=1 conv=notrunc 2>/dev/null
+    sync
+    VBF=$(dd if="$VBMETA" bs=1 skip=123 count=1 2>/dev/null | od -An -tu1 | tr -d ' \n')
+    [ $((VBF & 3)) -eq 3 ] || abort "could not disable verified boot in $VBMETA"
+    ui_print "- verified boot disabled ($VBMETA)"
+else
+    ui_print "- verified boot already disabled"
+fi
+
+# --- 3. flash boot -----------------------------------------------------------
+ui_print "- flashing boot (this carries the port)"
+unzip -p "$ZIP" images/halium-boot.img > /tmp/halium-boot.img 2>/dev/null \
+    || abort "could not read halium-boot.img from the zip"
+dd if=/tmp/halium-boot.img of="$BOOT" bs=1M 2>/dev/null || abort "boot flash failed"
+sync
+SZ=$(wc -c < /tmp/halium-boot.img)
+[ "$(dd if="$BOOT" bs=1M 2>/dev/null | head -c "$SZ" | md5sum | cut -d' ' -f1)" = \
+  "$(md5sum < /tmp/halium-boot.img | cut -d' ' -f1)" ] || abort "boot read-back does not match"
+rm -f /tmp/halium-boot.img
+ui_print "  boot written and verified"
+
+# --- 4. Halium Android system ------------------------------------------------
+ui_print "- installing Android system image (~600 MB)"
+rm -f /data/android-rootfs.img
+unzip -p "$ZIP" images/android-rootfs.img.gz | gzip -dc > /data/android-rootfs.img \
+    || abort "android-rootfs.img failed"
+[ "$(wc -c < /data/android-rootfs.img)" -gt 100000000 ] || abort "android-rootfs.img is truncated"
+sync
+
+# --- 5. Ubuntu Touch rootfs --------------------------------------------------
+# 6 GB, not 3. A 3 GB rootfs leaves ~330 MB free once Ubuntu Touch is
+# unpacked, which is not enough headroom to run an apt upgrade on the device.
+ui_print "- creating rootfs.img (6 GB, takes a few minutes)"
+rm -f /data/rootfs.img
+dd if=/dev/zero of=/data/rootfs.img bs=1M count=6144 2>/dev/null || abort "rootfs.img allocate failed"
+mke2fs -t ext4 -F /data/rootfs.img >/dev/null 2>&1 || abort "mke2fs failed"
+mkdir -p /tmp/rootmnt
+mount -o loop /data/rootfs.img /tmp/rootmnt 2>/dev/null || abort "cannot mount rootfs.img"
+ui_print "- unpacking Ubuntu Touch (~1 GB, slowest step)"
+unzip -p "$ZIP" images/ubuntu-touch-rootfs.tar.gz | tar --numeric-owner -xzf - -C /tmp/rootmnt 2>/dev/null
+# halium-install layout: the tarball may contain a top-level ./system
+if [ -d /tmp/rootmnt/system ] && [ ! -d /tmp/rootmnt/etc ]; then
+    mv /tmp/rootmnt/system/* /tmp/rootmnt/ 2>/dev/null
+    rmdir /tmp/rootmnt/system 2>/dev/null
+fi
+[ -d /tmp/rootmnt/etc ] && [ -x /tmp/rootmnt/usr/lib/systemd/systemd ] \
+    || { umount /tmp/rootmnt; abort "rootfs tarball did not unpack as expected"; }
+mkdir -p /tmp/rootmnt/android /tmp/rootmnt/userdata /tmp/rootmnt/var/lib/lxc/android/rootfs
+[ -h /tmp/rootmnt/data ] || ln -sf /android/data /tmp/rootmnt/data 2>/dev/null
+sync; umount /tmp/rootmnt
+ui_print "- rootfs.img ready"
+
+# --- 5b. drop the port's /etc files left by an earlier install ---------------
+# /etc/systemd/system and /etc/udev/rules.d are "synced" writable paths: at boot
+# the initramfs copies a file from the rootfs into /userdata/system-data only if
+# it is NOT already there, and never overwrites.  Installing over an earlier
+# release would therefore keep that release's units and drop-ins and silently
+# ignore the new ones (the old lxc-android-config override is exactly the one
+# that left fresh installs on the boot animation).  Removing the port-owned
+# copies lets the next boot sync the current ones in.  User settings (wifi,
+# accounts, time zone) are not on this list and are kept.
+if [ -d /data/system-data/etc ]; then
+    unzip -p "$ZIP" port-owned-etc.list 2>/dev/null | while read -r p; do
+        case "$p" in etc/*) rm -f "/data/system-data/$p" 2>/dev/null ;; esac
+    done
+    ui_print "- replaced the port's system files from any earlier install"
+fi
+
+# --- 6. first-boot defaults --------------------------------------------------
+mkdir -p /data/android-data
+: > /data/.android-autostart 2>/dev/null
+echo 3 > /data/.display-mode 2>/dev/null   # 1080x2376 @ 120 Hz
+: > /data/.no-qhd 2>/dev/null              # QHD is parked; see BUILD_NOTES
+sync
+
+ui_print " "
+ui_print "==========================================="
+ui_print " Done. First boot takes 2-3 minutes while"
+ui_print " the port installs itself from the boot"
+ui_print " image, then Ubuntu Touch's first-run"
+ui_print " setup starts. The passcode you choose"
+ui_print " there is also the phablet password."
+ui_print "==========================================="
+ui_print " "
+exit 0

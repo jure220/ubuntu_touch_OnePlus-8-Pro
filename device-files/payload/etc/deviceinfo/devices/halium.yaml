@@ -1,0 +1,50 @@
+# Device config for OnePlus 8 Pro (instantnoodlep) running Halium 14.
+#
+# Without this file device-info finds nothing ("[info] No device yaml config
+# found!" in every log) and falls back to the generic "halium" profile in
+# default.yaml, which sets GridUnit: 21 -- a value chosen for a 1080p panel.
+# At the panel's native 1440x3168 that makes the whole UI ~33% too small.
+# 1440/28 == 1080/21 == 51.4 grid units across, so 28 keeps the layout identical.
+halium:
+  Names:
+    - instantnoodlep
+    - OnePlus 8 Pro
+    - kona
+  PrettyName: OnePlus 8 Pro
+  DeviceType: phone
+  GridUnit: 21
+  PrimaryOrientation: Portrait
+  WebkitDpr: 2
+
+  # Punch-hole front camera (added 2026-09-17, needs Lomiri >= 24.04-2.x).
+  # Geometry taken from the OEM's own Android declaration rather than measured:
+  #   device/oneplus/instantnoodlep/overlay/OPlusFrameworksResTarget/res/values/config.xml
+  #     config_mainBuiltInDisplayCutout          -> circle r=41.5 centred x=-566.5,
+  #                                                 y=79.5 from screen centre-top
+  #     config_mainBuiltInDisplayCutoutRectApproximation -> "M 0,0 H 236 V 147 @left"
+  # Those are in the panel's NATIVE 1440x3168 space. The panel is driven at
+  # 1080x2376 (see halium-qhd-switch), so every value is scaled by 1080/1440 = 0.75:
+  #   236 x 147  ->  177 x 110, anchored at the top-left corner.
+  # Format is "x y w h" per rect, comma-separated (Lomiri DisplayCutoutsModel).
+  # NOTE: if the panel is ever switched back to native 1440x3168, these must
+  # become "0 0 236 147" and GridUnit must become 28.
+  # Second rect: the panel's curved RIGHT edge. It is not a physical cutout, but
+  # it is unusable display area for the same reason -- an icon sitting flush in
+  # it is distorted by the curve -- and DisplayCutoutsModel is exactly a list of
+  # "do not place UI here" rects. Declaring it here rather than patching the
+  # panel QML means it survives Lomiri upgrades. 21 px == 1 grid unit.
+  # NOTE: NO SPACE AFTER THE COMMA. Lomiri's parseRect() does
+  #     parts = rect.split(" "); if (parts.size() != 4) return QRect();
+  # with no trimming, so "110, 1059" leaves a leading space on the second rect,
+  # which then splits into 5 parts and is silently discarded as an empty QRect.
+  # That is why the camera rect worked and the curve rect did nothing.
+  DisplayCutoutsCollapsed: 0 0 177 110,1059 0 21 110
+  DisplayCutoutsExpanded: 0 0 177 110,1059 0 21 147
+
+  # Status bar height (Lomiri >= 24.04-2.x reads this as deviceConfig.collapsedPanelHeight;
+  # Shell.qml applies it only on screenIndex 0 in portrait, so the external
+  # monitor keeps the desktop default).
+  # Default is units.gu(3) = 63 px, but the punch-hole camera reaches y=91 px, so
+  # 63 leaves the hole poking into app content and anything between 63 and 91
+  # leaves it half-overlapping the bar. 95 px clears the hole entirely.
+  CollapsedPanelHeight: 95

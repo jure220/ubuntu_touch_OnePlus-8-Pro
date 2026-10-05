@@ -1,0 +1,30 @@
+[Unit]
+Description=Overlay the Lomiri SystemCompositor D-Bus policy before dbus reads it
+DefaultDependencies=no
+After=local-fs.target
+Before=dbus.service dbus.socket basic.target
+ConditionPathExists=/usr/lib/halium/com.lomiri.SystemCompositor.phablet.conf
+
+[Service]
+# The shipped com.lomiri.SystemCompositor.conf grants send access to the
+# Display/Input/PowerButton/UserActivity interfaces only to user="root", but the
+# shell runs as phablet (uid 32011), so its calls were refused. Our extra policy
+# lives on /userdata because /etc/dbus-1/system.d is read-only.
+#
+# This ran from halium-dynparts.sh before, which starts ~9 s AFTER dbus -- so
+# dbus read the old policy every boot and only a later ReloadConfig fixed it,
+# leaving a window of ~12 rejections. Ordering it Before=dbus.service closes
+# that window entirely.
+#
+# NOTE: the policy must use the NUMERIC uid. phablet lives in extrausers, not
+# /etc/passwd, so a user="phablet" rule does not match.
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'rm -rf /userdata/dbus-upper /userdata/dbus-work; \
+  mkdir -p /userdata/dbus-upper /userdata/dbus-work; \
+  cp /usr/lib/halium/com.lomiri.SystemCompositor.phablet.conf /userdata/dbus-upper/; \
+  mountpoint -q /etc/dbus-1/system.d || \
+  mount -t overlay overlay -o lowerdir=/etc/dbus-1/system.d,upperdir=/userdata/dbus-upper,workdir=/userdata/dbus-work /etc/dbus-1/system.d'
+
+[Install]
+WantedBy=sysinit.target

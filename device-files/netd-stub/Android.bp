@@ -1,0 +1,39 @@
+// Stub android.system.net.netd@1.1::INetd for Halium (OnePlus 8 Pro port).
+//
+// WHY: Qualcomm netmgrd blocks forever in NetmgrNetdClient::getInstance()
+// until an INetd HIDL service registers.  Halium's system image has no netd,
+// so netmgrd never finishes starting, never creates
+// /dev/socket/netmgr/netmgr_connect_socket, and every mobile data call fails
+// with "unable to get dsi hndl".  vendor/halium/config/halium.mk already lists
+// this module name in PRODUCT_PACKAGES, but no source for it exists in the
+// halium-14.0 tree (the build runs with ALLOW_MISSING_DEPENDENCIES=true, so
+// the gap was silent).
+//
+// Built for the vendor partition because it is started from /odm/bin/hw,
+// which the linker treats as vendor.  Everything except bionic and liblog is
+// linked statically: the device's vendor is VNDK 30 (Android 11) while this
+// tree builds against VNDK 34, and a static binary does not care.
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_binary {
+    name: "android.system.net.netd@1.1-service.stub",
+    vendor: true,
+    relative_install_path: "hw",
+    srcs: ["service.cpp"],
+    init_rc: ["android.system.net.netd@1.1-service.stub.rc"],
+    cflags: ["-Wall", "-Werror"],
+    static_libs: [
+        "android.system.net.netd@1.0",
+        "android.system.net.netd@1.1",
+        "libhidlbase",
+        "libutils",
+        "libcutils",
+        "libbase",
+    ],
+    // Both are LLNDK, i.e. provided to vendor processes by the system image
+    // with a stable ABI (libhidlbase needs android_load_sphal_library).
+    shared_libs: ["liblog", "libvndksupport"],
+    stl: "c++_static",
+}

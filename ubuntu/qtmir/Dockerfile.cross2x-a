@@ -1,0 +1,15 @@
+# qtmir cross-build image for Ubuntu Touch 24.04-2.x.
+# Same approach as Dockerfile.cross (native arm64 cross-compiler -- gcc ICEs
+# under qemu-user), but pointed at the 24.04-2.x channel so the arm64 -dev
+# packages match the ABI now running on the phone, plus the three build-deps
+# the 24.04-2.x qtmir source added over the 24.04-1.x one:
+#   libmir1wayland-dev, libwayland-dev, liblomiri-shell-api-dev
+FROM qtmircross:2
+ENV DEBIAN_FRONTEND=noninteractive
+RUN printf 'deb [arch=arm64] http://repo.ubports.com/ 24.04-2.x main\n' > /etc/apt/sources.list.d/ubports.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends --allow-downgrades \
+      libmir1wayland-dev:arm64 libwayland-dev:arm64 liblomiri-shell-api-dev:arm64 && \
+    apt-get upgrade -y --allow-downgrades --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /build

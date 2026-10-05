@@ -1,0 +1,22 @@
+# vendor/halium/droidmedia
+# base: 5c859c50de3ff1007fb15e9b4a955a63be956804 Merge pull request #132 from Halium/halium-12.0
+# apply from the tree root: git -C vendor/halium/droidmedia apply $PWD/<this file>
+diff --git a/minimedia.cpp b/minimedia.cpp
+index 7c2da7d..aeb336e 100644
+--- a/minimedia.cpp
++++ b/minimedia.cpp
+@@ -91,7 +91,13 @@ main(int, char**)
+ #endif
+     CameraService::instantiate();
+ #if ANDROID_MAJOR >= 6
+-#if ANDROID_MAJOR <= 12
++// Was <= 12. services_13_0_0.h and services_14_0_0.h both define
++// FakeResourceManagerService (registering as "media.resource_manager"), but the
++// guard was never widened when they were added, so on 13/14 the service was
++// defined and never instantiated. MediaCodec then fails with
++// "Failed to get ResourceManagerService (err=-32)" and video recording cannot
++// create an encoder.
++#if ANDROID_MAJOR <= 14
+     FakeResourceManagerService::instantiate();
+ #endif
+     FakeProcessInfoService::instantiate();

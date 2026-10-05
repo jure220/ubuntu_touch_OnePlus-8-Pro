@@ -1,0 +1,26 @@
+[Unit]
+Description=Halium WLAN (QCA6390) driver load
+After=local-fs.target android-mount.service NetworkManager.service
+# DELIBERATELY orders itself AFTER the network stack and gates NOTHING.
+#
+# An earlier version used "Before=network-pre.target NetworkManager.service".
+# That wedged a boot completely: bringing up the QCA6390 involves a firmware
+# download and PCIe bring-up in the kernel, and if that blocks, the process sits
+# in uninterruptible sleep where TimeoutStartSec cannot kill it.  network-pre
+# then never activates, so network.target never activates, so ssh.service never
+# starts -- while ssh.socket still accepts connections and answers nothing.
+# The phone had to be power-cycled by hand.
+#
+# WiFi coming up a few seconds later than the rest of the stack costs nothing.
+# WiFi being able to hold the entire boot hostage costs everything.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Fire-and-forget: the unit completes immediately, so no matter how badly the
+# driver misbehaves it can never hold up a systemd job.
+ExecStart=/bin/sh -c 'setsid /usr/lib/halium/halium-wlan.sh >/dev/null 2>&1 < /dev/null &'
+TimeoutStartSec=15
+
+[Install]
+WantedBy=multi-user.target

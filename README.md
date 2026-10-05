@@ -42,26 +42,28 @@ The zip contains:
 - the **boot image**: kernel plus the device port, which installs itself into
   the rootfs on first boot.
 
-No proprietary OnePlus files are shipped. On first boot the port copies the
-files it needs (camera tuning, audio calibration, radio libraries, vibration
-waveforms...) from your own phone's odm partition.
+The port does not ship OnePlus's device files: it copies what it needs
+(camera tuning, audio calibration, radio libraries, vibration waveforms, WiFi
+firmware...) from your own phone's odm and modem partitions. The Android
+system image is a LineageOS 21 build and, like every LineageOS build, contains
+the system_ext libraries from LineageOS's vendor repository (Qualcomm's IMS,
+Wi-Fi Display and DPM libraries, and OnePlus's IMS extension).
 
 The README inside the zip lists every change the port makes.
 
 ## Source
 
-[`source/`](source) holds every modified open-source component as patches
-against public upstream revisions, with build notes in
-[`source/README.txt`](source/README.txt):
+Everything needed to rebuild the zip is public. [BUILDING.md](BUILDING.md)
+walks through it.
 
-| Component | Base |
+| What | Where |
 |---|---|
-| Linux kernel 4.19 | LineageOS `android_kernel_oneplus_sm8250`, `lineage-21` |
-| Mir 1.8.3 | UBports `mir1` 1.8.3-0ubports1 |
-| mir-android2-platform | UBports, commit 72f96d2 |
-| qtmir 0.7.2 | UBports 24.04-2.x package |
-| Qt Quick 5.15.13 | Ubuntu `qtdeclarative-opensource-src-gles` 5.15.13+dfsg-2 |
-| media-hub | UBports, commit 3b69471 |
+| Linux kernel 4.19 | [jure220/android_kernel_oneplus_sm8250](https://github.com/jure220/android_kernel_oneplus_sm8250/tree/lineage-21-ubuntu-touch), branch `lineage-21-ubuntu-touch` (LineageOS `lineage-21` + the port's commits) |
+| Device tree | [jure220/android_device_oneplus_instantnoodlep](https://github.com/jure220/android_device_oneplus_instantnoodlep/tree/lineage-21-ubuntu-touch), branch `lineage-21-ubuntu-touch` |
+| Android tree | [`manifests/`](manifests) (local manifests for Halium 14), [`android-patches/`](android-patches) (changes to Halium and AOSP projects) |
+| Device port | [`device-files/payload/`](device-files/payload): systemd units, scripts, udev rules, configs, prebuilt libraries; installed into the rootfs by the boot image |
+| Boot image and zip | [`device-files/`](device-files): `build-boot-payload.sh`, `initramfs-halium-scripts.patch`, `build-release-zip.sh`, the installer |
+| Mir, mir-android2-platform, qtmir, Qt Quick, media-hub | [`ubuntu/`](ubuntu): patches against the exact package sources, Dockerfiles and build scripts |
 
 ## Security
 

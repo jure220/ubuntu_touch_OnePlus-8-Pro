@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ===========================================================================
+  Qualcomm sm8250 (kona) support repos.
+
+  WHY THIS FILE EXISTS
+  Halium 14.0's manifest deliberately trims LineageOS projects it does not
+  need ("(halium) manifest: trim Java-only LineageOS projects"). That trim
+  removed the qcom-caf repos, but device/oneplus/sm8250-common REQUIRES them:
+
+    common.mk:8            inherit-product hardware/qcom-caf/common/common.mk
+    common.mk:67           AUDIO_HAL_DIR := hardware/qcom-caf/sm8250/audio
+    BoardConfigCommon:87   hardware/qcom-caf/common/vendor_framework_compatibility_matrix.xml
+    BoardConfigCommon:89   DEVICE_MATRIX_FILE := hardware/qcom-caf/common/compatibility_matrix.xml
+    BoardConfigCommon      include device/qcom/sepolicy_vndr/SEPolicy.mk
+
+  Revisions copied from LineageOS/android @ lineage-21.0 snippets/lineage.xml,
+  which is authoritative for which CAF branch each SoC uses.
+
+  NOTE: these use "lineage-21.0" / "lineage-21.0-caf-*" (WITH the .0),
+  unlike the OnePlus device repos which use "lineage-21" (no .0).
+  ===========================================================================
+-->
+<manifest>
+
+  <!-- Shared CAF glue + the compatibility matrices the board config reads.
+       The linkfiles below are guard stubs: they drop a tiny Android.mk /
+       Android.bp into directories that would otherwise be picked up wrongly
+       by the build system. os_pickup_sepolicy_vndr.mk is what actually
+       creates device/qcom/sepolicy_vndr/SEPolicy.mk. -->
+  <project path="hardware/qcom-caf/common"
+           name="LineageOS/android_hardware_qcom-caf_common"
+           revision="lineage-21.0">
+    <linkfile src="os_pickup_aosp.mk"           dest="hardware/qcom/Android.mk" />
+    <linkfile src="os_pickup_sepolicy_vndr.mk"  dest="device/qcom/sepolicy_vndr/SEPolicy.mk" />
+    <linkfile src="os_pickup_qssi.bp"           dest="hardware/qcom-caf/sm8250/Android.bp" />
+    <linkfile src="os_pickup.mk"                dest="hardware/qcom-caf/sm8250/Android.mk" />
+  </project>
+
+  <!-- SELinux policy for "legacy unified memory" QCOM SoCs, which kona is. -->
+  <project path="device/qcom/sepolicy_vndr/legacy-um"
+           name="LineageOS/android_device_qcom_sepolicy_vndr"
+           revision="lineage-21.0-legacy-um" />
+
+  <!-- sm8250-specific HALs. audio is required by AUDIO_HAL_DIR; display and
+       media are needed for the graphics/codec stack Halium exposes. -->
+  <project path="hardware/qcom-caf/sm8250/audio"
+           name="LineageOS/android_hardware_qcom_audio"
+           revision="lineage-21.0-caf-sm8250" />
+  <project path="hardware/qcom-caf/sm8250/display"
+           name="LineageOS/android_hardware_qcom_display"
+           revision="lineage-21.0-caf-sm8250" />
+  <project path="hardware/qcom-caf/sm8250/media"
+           name="LineageOS/android_hardware_qcom_media"
+           revision="lineage-21.0-caf-sm8250" />
+
+  <!-- Wi-Fi. NOTE: use hardware/qcom/wlan, NOT hardware/qcom-caf/wlan.
+       The caf variant is groups="qcom,kailua-vendor" (sm8550 only) and
+       contains ONLY Android.mk modules. frameworks/opt/net/wifi/libwifi_hal/
+       Android.bp:163 needs a soong cc_defaults named "libwifi-hal-qcom",
+       which only hardware/qcom/wlan @ lineage-21.0 defines (it dispatches on
+       BOARD_WLAN_CHIP and falls through to legacy/ for kona).
+       Syncing both would also collide: both define LOCAL_MODULE
+       := libwifi-hal-qcom in qcwcn/wifi_hal/Android.mk. -->
+  <project path="hardware/qcom/wlan"
+           name="LineageOS/android_hardware_qcom_wlan"
+           revision="lineage-21.0" />
+
+  <!-- Bluetooth and thermal HALs referenced by the common tree. -->
+  <project path="hardware/qcom-caf/bt"
+           name="LineageOS/android_hardware_qcom_bt"
+           revision="lineage-21.0-caf" />
+  <project path="hardware/qcom-caf/thermal"
+           name="LineageOS/android_hardware_qcom_thermal"
+           revision="lineage-21.0" />
+
+  <!-- Soong namespaces imported by Android.bp files. Missing ones are a hard
+       error at soong bootstrap:
+         hardware/oplus/Android.bp:6              imports hardware/qcom-caf/bootctrl
+         hardware/qcom-caf/sm8250/Android.bp      imports both display namespaces
+           (that file is the os_pickup_qssi.bp linkfile from qcom-caf/common) -->
+  <project path="hardware/qcom-caf/bootctrl"
+           name="LineageOS/android_hardware_qcom_bootctrl"
+           revision="lineage-21.0-caf" />
+  <project path="vendor/qcom/opensource/commonsys-intf/display"
+           name="LineageOS/android_vendor_qcom_opensource_display-commonsys-intf"
+           revision="lineage-21.0" />
+  <project path="vendor/qcom/opensource/display"
+           name="LineageOS/android_vendor_qcom_opensource_display"
+           revision="lineage-21.0" />
+
+  <!-- Namespaces added by hardware/qcom-caf/common/BoardConfigQcom.mk once
+       LINEAGE_BUILD is set (lines 194-218). kona is both a QSSI-supported and
+       a LEGACY_UM platform, so it gets the commonsys display pair, the
+       legacy-um data-ipa-cfg-mgr, and dataservices.
+       NOT added: hardware/qcom-caf/wlan (BoardConfigQcom.mk:222 adds that
+       namespace unconditionally, but LineageOS only syncs it for kailua
+       devices, so real kona builds run with it absent). -->
+  <project path="vendor/qcom/opensource/commonsys/display"
+           name="LineageOS/android_vendor_qcom_opensource_display-commonsys"
+           revision="lineage-21.0" />
+  <project path="vendor/qcom/opensource/data-ipa-cfg-mgr-legacy-um"
+           name="LineageOS/android_vendor_qcom_opensource_data-ipa-cfg-mgr"
+           revision="lineage-21.0-legacy-um" />
+  <project path="vendor/qcom/opensource/dataservices"
+           name="LineageOS/android_vendor_qcom_opensource_dataservices"
+           revision="lineage-21.0" />
+
+  <!-- QSSI sepolicy. device/qcom/sepolicy_vndr/legacy-um/SEPolicy.mk sets
+           QSSI_SEPOLICY_PATH := device/qcom/sepolicy
+       and pulls attribute declarations from
+           $(QSSI_SEPOLICY_PATH)/generic/public/attribute
+           $(QSSI_SEPOLICY_PATH)/qva/public/attribute
+       Without it, attributes used by sepolicy_vndr are never declared, e.g.
+           crash_dump.te:37: ERROR 'attribute vendor_qccsyshal_client is not declared'
+       kona is a QSSI-supported platform, so this repo is required. -->
+  <project path="device/qcom/sepolicy"
+           name="LineageOS/android_device_qcom_sepolicy"
+           revision="lineage-21.0" />
+
+  <!-- Wi-Fi make modules (lib_driver_cmd_qcwcn, needed by hostapd/wpa_supplicant
+       via BOARD_HOSTAPD_PRIVATE_LIB). BOTH wlan repos are required and they do
+       NOT collide:
+         hardware/qcom/wlan      -> Android.bp only. Provides the soong
+                                    cc_defaults "libwifi-hal-qcom" that
+                                    frameworks/opt/net/wifi needs. Its
+                                    Android.mk modules are UNREACHABLE because
+                                    hardware/qcom/Android.mk (the os_pickup_aosp
+                                    guard) includes only keymaster when
+                                    BOARD_USES_QCOM_HARDWARE=true, which kona sets.
+         hardware/qcom-caf/wlan  -> Android.mk modules, not guarded. This is
+                                    where lib_driver_cmd_qcwcn actually comes
+                                    from for this device.
+       Without this, `mka vendorimage` fails with:
+         'lib_driver_cmd_qcwcn.a', needed by 'hostapd', missing and no known rule -->
+  <project path="hardware/qcom-caf/wlan"
+           name="LineageOS/android_hardware_qcom_wlan"
+           revision="lineage-21.0-caf" />
+
+  <!-- QTI HIDL interface definitions (vendor.qti.hardware.*). Needed once you
+       build vendorimage: hardware/qcom-caf/sm8250/display/gralloc/Android.mk
+       links vendor.qti.hardware.display.allocator@4.0, which is defined here.
+       Not needed for systemimage alone, which is why it only surfaced now. -->
+  <project path="vendor/qcom/opensource/interfaces"
+           name="LineageOS/android_vendor_qcom_opensource_interfaces"
+           revision="lineage-21.0" />
+
+  <!-- Provides thermal_client.h, included by
+       hardware/qcom-caf/sm8250/display/composer/hwc_display_builtin.h:69.
+       vendorimage-only dependency. -->
+  <project path="vendor/qcom/opensource/thermal-engine"
+           name="LineageOS/android_vendor_qcom_opensource_thermal-engine"
+           revision="lineage-21.0" />
+
+</manifest>

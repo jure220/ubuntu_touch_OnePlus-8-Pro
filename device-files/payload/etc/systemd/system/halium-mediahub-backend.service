@@ -1,0 +1,14 @@
+[Unit]
+Description=Repair media-hub's video backend if it lost the boot race
+After=lxc-android-config.service halium-swcodec.service
+# Gates NOTHING, per project rule 3. Type=simple, so systemd considers it
+# started the moment it forks; its long wait loop can never delay
+# multi-user.target. If anything is missing it gives up and exits 0.
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/halium/halium-mediahub-backend.sh
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

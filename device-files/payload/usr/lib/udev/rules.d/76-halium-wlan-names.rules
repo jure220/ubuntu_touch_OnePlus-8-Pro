@@ -1,0 +1,14 @@
+# Keep the QCA6390 WLAN interfaces on the kernel's own names (wlan0, p2p0,
+# wifi-aware0).
+#
+# systemd's predictable naming (80-net-setup-link.rules) gives all three the
+# same PCI-path name, wlp1s0, so whichever registers first gets it and the
+# others keep their kernel names -- and which one wins varies between boots.
+# NetworkManager keys profiles by interface name, and factory Ubuntu Touch
+# devices call the station interface wlan0, so the name has to be stable.
+# 80-net-setup-link only names an interface whose NAME is still empty, so
+# setting it here (76 sorts first) keeps the kernel name.
+#
+# Matched by driver, not by MAC: this ships to every phone.  (The development
+# phone used a per-MAC rule in /etc/udev/rules.d; that cannot be shipped.)
+SUBSYSTEM=="net", ACTION=="add", DRIVERS=="cnss_pci", KERNEL=="wlan*|p2p*|wifi-aware*", NAME="$kernel"

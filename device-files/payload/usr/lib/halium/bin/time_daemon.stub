@@ -1,0 +1,19 @@
+#!/system/bin/sh
+# Stub replacing /vendor/bin/time_daemon on instantnoodlep.
+#
+# The real time_daemon pushes the modem/RTC time-of-day into the SYSTEM clock.
+# This phone has no writable RTC and no time source, so it pushes the epoch and
+# destroys the clock that halium-time.sh restored. Proven: with the clock set
+# correctly, `setprop ctl.restart time_daemon` moved it to 1970 within seconds.
+#
+# It cannot be disabled with the usual empty-rc bind, because it is declared as
+# a `service` in THREE rc files -- init.time_daemon.rc (small, blankable) but
+# ALSO init.qcom.rc and init.wlan.qcom.rc, which are essential and must not be
+# blanked. So the BINARY is stubbed instead.
+#
+# This must never exit: time_daemon is `class main`, so init restarts a service
+# that exits, and a tight restart loop is what pushed this device to 29k threads
+# and an out-of-memory wedge once already.
+while true; do
+    sleep 3600
+done

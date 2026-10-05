@@ -1,0 +1,254 @@
+# frameworks/av
+# base: 5add291709b199b7913008576b322855a5e9d839 (halium) libstagefright: ignore missing media.resource_manager service
+# apply from the tree root: git -C frameworks/av apply $PWD/<this file>
+diff --git a/media/libaudioclient/AudioSystem.cpp b/media/libaudioclient/AudioSystem.cpp
+index b489d56..8fd2721 100644
+--- a/media/libaudioclient/AudioSystem.cpp
++++ b/media/libaudioclient/AudioSystem.cpp
+@@ -113,6 +113,26 @@ public:
+         } else {
+             reportNoError = true;
+         }
++        // HALIUM: bound this wait. It used to retry once a second FOREVER, and
++        // it does so while holding both mSingleGetter and mMutex.
++        //
++        // A Halium port has no audioserver at all, so "media.audio_flinger" is
++        // never published and any thread that gets here wedges permanently --
++        // taking every other AudioSystem caller down with it. Observed on
++        // instantnoodlep: stopping a video recording destroys the recorder, and
++        //     MediaRecorderClient::release()
++        //       -> ~StagefrightRecorder() -> ~AudioSource() -> ~AudioRecord()
++        //         -> AudioSystem::releaseAudioSessionId() -> here
++        // ran on one of camera_service's binder threads and never returned. Every
++        // later CREATE_MEDIA_RECORDER transaction then blocked on mMutex, so the
++        // camera app's UI thread hung until systemd SIGKILLed it 90 s later. Each
++        // recording leaked one more permanently-stuck binder thread.
++        //
++        // Returning nullptr is exactly what the callers already expect: 46 of the
++        // 49 get_audio_flinger() call sites in this file test the result for null
++        // first, releaseAudioSessionId() among them.
++        constexpr int kServiceWaitSeconds = 5;
++        int secondsWaited = 0;
+         while (true) {
+             mService = mLocalService;
+             if (mService != nullptr) break;
+@@ -122,6 +142,21 @@ public:
+                 sp <IServiceManager> sm = defaultServiceManager();
+                 binder = sm->checkService(String16(ServiceTraits::SERVICE_NAME));
+                 if (binder == nullptr) {
++                    if (mGaveUp) {
++                        // We already spent the full timeout on this service once
++                        // and it never appeared. The checkService() above is cheap
++                        // and non-blocking, so it is enough of a re-check; do not
++                        // stall this caller for another kServiceWaitSeconds.
++                        return nullptr;
++                    }
++                    if (secondsWaited >= kServiceWaitSeconds) {
++                        ALOGE("%s: %s never appeared after %d s; giving up rather "
++                                "than blocking this and every other caller forever",
++                                __func__, ServiceTraits::SERVICE_NAME, secondsWaited);
++                        mGaveUp = true;
++                        mCvGetter.reset();
++                        return nullptr;
++                    }
+                     ALOGD("%s: waiting for %s", __func__, ServiceTraits::SERVICE_NAME);
+ 
+                     // if the condition variable is present, setLocalService() and
+@@ -130,9 +165,11 @@ public:
+                         mCvGetter = std::make_shared<std::condition_variable>();
+                     }
+                     mCvGetter->wait_for(ul, std::chrono::seconds(1));
++                    ++secondsWaited;
+                     continue;
+                 }
+             }
++            mGaveUp = false;  // it is there after all; allow full waits again
+             binder->linkToDeath(mClient);
+             auto aidlInterface = interface_cast<AidlInterface>(binder);
+             LOG_ALWAYS_FATAL_IF(aidlInterface == nullptr);
+@@ -198,6 +235,9 @@ private:
+     sp<ServiceInterface> mLocalService GUARDED_BY(mMutex);
+     sp<ServiceInterface> mService GUARDED_BY(mMutex);
+     sp<Client> mClient GUARDED_BY(mMutex);
++    // Set once we have waited the full timeout for this service without it
++    // appearing, so later callers fail fast instead of each paying the wait.
++    bool mGaveUp GUARDED_BY(mMutex) = false;
+ };
+ 
+ struct AudioFlingerTraits {
+diff --git a/media/libstagefright/CameraSource.cpp b/media/libstagefright/CameraSource.cpp
+index 4441121..ae149c8 100644
+--- a/media/libstagefright/CameraSource.cpp
++++ b/media/libstagefright/CameraSource.cpp
+@@ -503,6 +503,25 @@ status_t CameraSource::initBufferQueue(uint32_t width, uint32_t height,
+         return res;
+     }
+ 
++    // HALIUM: claim camera ownership immediately before setVideoTarget().
++    //
++    // isCameraAvailable() already calls mCamera->lock(), but on this port the
++    // camera is opened by a Ubuntu-side process whose pid the in-container
++    // camera service cannot see across the pid namespace, so Camera2Client
++    // records mClientPid = 0. Whatever that earlier lock() did, mClientPid is
++    // still 0 by the time we get here and Camera2ClientBase::checkPid() rejects
++    // setVideoTarget with PERMISSION_DENIED:
++    //     setVideoTarget: attempt to use a locked camera from a different
++    //     process (old pid 0, new pid <media>)
++    // Camera2Client::lock() takes ownership when mClientPid == 0 and is a no-op
++    // when we already own it, so this is harmless on a normal Android device.
++    // The result is logged rather than treated as fatal: EBUSY would mean
++    // someone else genuinely owns the camera, and setVideoTarget below reports
++    // that in the usual way.
++    status_t lockRes = mCamera->lock();
++    ALOGI("%s: pre-setVideoTarget lock() -> %d (%s)", __FUNCTION__, lockRes,
++            lockRes == OK ? "owned" : strerror(-lockRes));
++
+     res = mCamera->setVideoTarget(mVideoBufferProducer);
+     if (res != OK) {
+         ALOGE("%s: Failed to set video target: %s (%d)", __FUNCTION__, strerror(-res), res);
+diff --git a/services/camera/libcameraservice/CameraService.cpp b/services/camera/libcameraservice/CameraService.cpp
+index 30cc5c8..569ec0c 100644
+--- a/services/camera/libcameraservice/CameraService.cpp
++++ b/services/camera/libcameraservice/CameraService.cpp
+@@ -1044,6 +1044,37 @@ bool CameraService::checkPermission(const std::string& cameraId, const std::stri
+ 
+ bool CameraService::hasPermissionsForSystemCamera(const std::string& cameraId, int callingPid,
+         int callingUid) const{
++    // HALIUM / UBUNTU TOUCH PORT (OnePlus 8 Pro, 2026-09-02).
++    //
++    // AOSP hides cameras that advertise REQUEST_AVAILABLE_CAPABILITIES_SYSTEM_CAMERA
++    // from any caller lacking android.permission.SYSTEM_CAMERA. On this device
++    // OnePlus tags SIX of the eight camera devices that way -- including the
++    // ultra-wide and telephoto units, which are otherwise perfectly usable and
++    // do advertise BACKWARD_COMPATIBLE. The result was:
++    //     Number of camera devices: 8
++    //     Number of normal camera devices: 2
++    //     Number of public camera devices visible to API1: 2
++    // i.e. only the main rear and front cameras ever reached Ubuntu Touch.
++    //
++    // The check below can NEVER succeed on this port. There is no Android app
++    // framework, no package manager and no permission service in the container;
++    // the only camera client is the trusted Ubuntu Touch session itself, which
++    // connects as package "hybris" with a Linux uid that means nothing to
++    // Android's permission model. Stock ROMs (LineageOS, OxygenOS) pass this
++    // check only because their system camera app is granted the permission by a
++    // real framework we do not have.
++    //
++    // Since the permission cannot be granted and the caller is inherently
++    // trusted, grant it. Set persist.halium.camera.hide_system_cameras=1 to
++    // restore stock AOSP behaviour without rebuilding.
++    //
++    // NOTE this only affects VISIBILITY. It does not make the 5 MP colour-filter
++    // unit usable from Camera API1: that device does not advertise
++    // BACKWARD_COMPATIBLE at all and is reachable only through Camera2/NDK.
++    if (!property_get_bool("persist.halium.camera.hide_system_cameras", false)) {
++        return true;
++    }
++
+     AttributionSourceState attributionSource{};
+     attributionSource.pid = callingPid;
+     attributionSource.uid = callingUid;
+@@ -1519,7 +1550,12 @@ std::string CameraService::cameraIdIntToStrLocked(int cameraIdInt) {
+     bool checkPermissionForSystemCamera = checkPermission(std::to_string(cameraIdInt),
+                 sSystemCameraPermission, attributionSource, std::string(),
+                 AppOpsManager::OP_NONE);
+-    if (checkPermissionForSystemCamera || getpid() == callingPid) {
++    // HALIUM: the same exposure decision has to be made here as in
++    // hasPermissionsForSystemCamera(), or getNumberOfCameras() would advertise
++    // the extra cameras while this index -> id mapping still refused to resolve
++    // them, and every open of camera 2/3 would fail with "CameraId is not valid".
++    if (!property_get_bool("persist.halium.camera.hide_system_cameras", false)
++            || checkPermissionForSystemCamera || getpid() == callingPid) {
+         deviceIds = &mNormalDeviceIds;
+     }
+     if (cameraIdInt < 0 || cameraIdInt >= static_cast<int>(deviceIds->size())) {
+diff --git a/services/camera/libcameraservice/common/CameraProviderManager.cpp b/services/camera/libcameraservice/common/CameraProviderManager.cpp
+index 15e2755..ffbdbe7 100644
+--- a/services/camera/libcameraservice/common/CameraProviderManager.cpp
++++ b/services/camera/libcameraservice/common/CameraProviderManager.cpp
+@@ -3230,6 +3230,41 @@ status_t CameraProviderManager::getCameraCharacteristicsLocked(const std::string
+ void CameraProviderManager::filterLogicalCameraIdsLocked(
+         std::vector<std::string>& deviceIds) const
+ {
++    // HALIUM / UBUNTU TOUCH PORT (OnePlus 8 Pro, 2026-09-02).
++    //
++    // Stock behaviour below keeps exactly ONE camera id per facing direction:
++    // for every logical camera it gathers {logical id + its physical ids},
++    // groups by facing, and removes all but the first. On this device the three
++    // logical multi-cameras (5, 6, 7) list the physical rear sensors (0, 2, 3,
++    // 4) as their members, so the whole rear combo collapses to camera 0 and
++    // the ultra-wide and telephoto are unreachable from Camera API1 -- which is
++    // the only API libhybris exposes to Ubuntu Touch. Lifting the SYSTEM_CAMERA
++    // permission gate in CameraService alone does NOT help, because this filter
++    // runs first and shortens the list before any permission is consulted.
++    //
++    // AOSP's reason for collapsing is that "API1 apps don't handle logical and
++    // physical camera devices well" -- an app that expects one back camera can
++    // be confused by several. Ubuntu Touch's camera app simply enumerates and
++    // lets the user cycle, so that concern does not apply here.
++    //
++    // So instead of collapsing per facing, drop only the LOGICAL ids and keep
++    // every physical sensor that is API1-compatible in its own right. Result on
++    // this device: 0 (main rear), 1 (front), 2 and 3 (the aux rear sensors),
++    // with 5/6/7 removed as duplicates of combinations. The 5 MP colour-filter
++    // unit (4) is already excluded upstream because it does not advertise
++    // BACKWARD_COMPATIBLE and therefore cannot be driven by API1 at all.
++    //
++    // Set persist.halium.camera.hide_system_cameras=1 to restore stock AOSP
++    // behaviour without rebuilding.
++    if (!property_get_bool("persist.halium.camera.hide_system_cameras", false)) {
++        deviceIds.erase(std::remove_if(deviceIds.begin(), deviceIds.end(),
++                [this](const std::string& s) {
++                    auto deviceInfo = findDeviceInfoLocked(s);
++                    return deviceInfo != nullptr && deviceInfo->mIsLogicalCamera;
++                }), deviceIds.end());
++        return;
++    }
++
+     // Map between camera facing and camera IDs related to logical camera.
+     std::map<int, std::unordered_set<std::string>> idCombos;
+ 
+diff --git a/services/camera/libcameraservice/utils/CameraServiceProxyWrapper.cpp b/services/camera/libcameraservice/utils/CameraServiceProxyWrapper.cpp
+index 65e93a9..4e89dbd 100644
+--- a/services/camera/libcameraservice/utils/CameraServiceProxyWrapper.cpp
++++ b/services/camera/libcameraservice/utils/CameraServiceProxyWrapper.cpp
+@@ -23,6 +23,7 @@
+ #include <utils/String16.h>
+ #include <camera/StringUtils.h>
+ #include <binder/IServiceManager.h>
++#include <cutils/properties.h>
+ 
+ #include "CameraServiceProxyWrapper.h"
+ 
+@@ -372,7 +373,30 @@ void CameraServiceProxyWrapper::logClose(const std::string& id, int32_t latencyM
+ 
+ bool CameraServiceProxyWrapper::isCameraDisabled(int userId) {
+     sp<ICameraServiceProxy> proxyBinder = getCameraServiceProxy();
+-    if (proxyBinder == nullptr) return true;
++    if (proxyBinder == nullptr) {
++        // HALIUM: this question is "has a device-policy administrator switched
++        // the camera off for this user?", and it is answered by
++        // media.camera.proxy -- a JAVA system service living in services.jar.
++        //
++        // A Halium container has no Android framework, so that service can
++        // never be registered and this lookup always returns nullptr. Stock
++        // AOSP then fails CLOSED and reports the camera as disabled, because on
++        // a real Android a missing proxy means the system server has not
++        // started yet and policy cannot be consulted -- it would be wrong to
++        // let apps in before it can. On this port there is no system server, no
++        // device policy manager and no administrator, so nothing can ever
++        // disable the camera and the truthful answer is "not disabled".
++        //
++        // Failing closed here blocks EVERY Camera2 open on this device, for
++        // every camera id, because connectDevice() is the only caller. Camera
++        // API1's connect() does not consult it, which is why the Ubuntu Touch
++        // camera app works while Camera2 -- the only way to reach the 5 MP
++        // colour-filter sensor, which is not BACKWARD_COMPATIBLE -- does not.
++        //
++        // Set persist.halium.camera.strict_device_policy=1 to restore stock
++        // AOSP behaviour without rebuilding.
++        return property_get_bool("persist.halium.camera.strict_device_policy", false);
++    }
+     bool ret = false;
+     auto status = proxyBinder->isCameraDisabled(userId, &ret);
+     if (!status.isOk()) {

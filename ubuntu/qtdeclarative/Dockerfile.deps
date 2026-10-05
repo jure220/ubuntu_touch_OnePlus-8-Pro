@@ -1,0 +1,9 @@
+FROM qtbuild:1
+ENV DEBIAN_FRONTEND=noninteractive
+# Build-deps for qtdeclarative-opensource-src-gles 5.15.13+dfsg-2, arm64.
+# xauth/xvfb are <!nocheck> only, and we build with DEB_BUILD_OPTIONS=nocheck.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      debhelper pkg-kde-tools python3 \
+      libqt5qml5:arm64 libqt5qmlmodels5:arm64 \
+      qtbase5-private-gles-dev:arm64 \
+ && rm -rf /var/lib/apt/lists/*

@@ -1,0 +1,57 @@
+# halium/halium-boot
+# base: 499ea587183ea9407a0ccce64013b6cfa80d0efe Fix regex: Would otherwise return more values from grep (#9)
+# apply from the tree root: git -C halium/halium-boot apply $PWD/<this file>
+diff --git a/Android.mk b/Android.mk
+index 451c69d..01e0950 100644
+--- a/Android.mk
++++ b/Android.mk
+@@ -60,6 +60,26 @@ ifeq ($(BOARD_KERNEL_SEPARATED_DT),true)
+   BOOTIMAGE_EXTRA_DEPS := $(INSTALLED_DTIMAGE_TARGET)
+ endif
+ 
++# (halium/instantnoodlep) Boot header v2 embeds the DTB inside the boot image
++# rather than shipping a separate dt.img. This repo only ever handled the
++# legacy BOARD_KERNEL_SEPARATED_DT scheme above, so without this block the
++# generated halium-boot.img has NO device tree and the device cannot boot.
++#
++# Mirrors AOSP build/make/core/Makefile:1323-1325:
++#     ifdef BOARD_INCLUDE_DTB_IN_BOOTIMG
++#       INTERNAL_BOOTIMAGE_ARGS += --dtb $(INSTALLED_DTBIMAGE_TARGET)
++#
++# $(PRODUCT_OUT)/dtb.img is used literally rather than
++# $(INSTALLED_DTBIMAGE_TARGET) because HALIUM_BOOTIMAGE_ARGS is a := variable,
++# so += expands immediately, and this Android.mk is read BEFORE
++# core/Makefile defines INSTALLED_DTBIMAGE_TARGET. The file itself is produced
++# by vendor/lineage/build/tasks/kernel.mk ("Building dtb.img").
++ifeq ($(BOARD_INCLUDE_DTB_IN_BOOTIMG),true)
++  HALIUM_DTB_IMAGE := $(PRODUCT_OUT)/dtb.img
++  HALIUM_BOOTIMAGE_ARGS += --dtb $(HALIUM_DTB_IMAGE)
++  BOOTIMAGE_EXTRA_DEPS += $(HALIUM_DTB_IMAGE)
++endif
++
+ ifdef BOARD_KERNEL_BASE
+   HALIUM_BOOTIMAGE_ARGS += --base $(BOARD_KERNEL_BASE)
+ endif
+@@ -91,14 +111,20 @@ HALIUM_BOOT_INTERMEDIATE := $(call intermediates-dir-for,ROOT,$(LOCAL_MODULE),)
+ HALIUM_BOOT_RAMDISK := $(HALIUM_BOOT_INTERMEDIATE)/halium-initramfs.gz
+ GET_INITRD := $(LOCAL_PATH)/get-initrd.sh
+ 
+-$(LOCAL_BUILT_MODULE): $(INSTALLED_KERNEL_TARGET) $(HALIUM_BOOT_RAMDISK) $(BOOTIMAGE_EXTRA_DEPS)
++$(LOCAL_BUILT_MODULE): $(MKBOOTIMG) $(INSTALLED_KERNEL_TARGET) $(HALIUM_BOOT_RAMDISK) $(BOOTIMAGE_EXTRA_DEPS)
+ 	@echo "Making halium-boot.img in $(dir $@) using $(INSTALLED_KERNEL_TARGET) $(HALIUM_BOOT_RAMDISK)"
+ 	@mkdir -p $(dir $@)
+ 	@rm -rf $@
+ ifeq ($(BOARD_CUSTOM_MKBOOTIMG),pack_intel)
+ 	$(MKBOOTIMG) $(DEVICE_BASE_BOOT_IMAGE) $(INSTALLED_KERNEL_TARGET) $(HALIUM_BOOT_RAMDISK) $(cmdline) $@
+ else
+-	@mkbootimg --ramdisk $(HALIUM_BOOT_RAMDISK) $(HALIUM_BOOTIMAGE_ARGS) $(BOARD_MKBOOTIMG_ARGS) --output $@
++	@# (halium/instantnoodlep) was bare "mkbootimg", which relied on the tool
++	@# being on PATH. Android 14 sandboxes PATH for build hermeticity, so that
++	@# fails with "mkbootimg: command not found". $(MKBOOTIMG) is defined at
++	@# build/make/core/config.mk:683 as $(HOST_OUT_EXECUTABLES)/mkbootimg.
++	@# Note the BOARD_CUSTOM_MKBOOTIMG branch above already used $(MKBOOTIMG);
++	@# only this default branch was left behind.
++	$(MKBOOTIMG) --ramdisk $(HALIUM_BOOT_RAMDISK) $(HALIUM_BOOTIMAGE_ARGS) $(BOARD_MKBOOTIMG_ARGS) --output $@
+ endif
+ ifdef BOOT_RAMDISK_SEANDROIDENFORCE
+ 	@echo -n "SEANDROIDENFORCE" >> $@

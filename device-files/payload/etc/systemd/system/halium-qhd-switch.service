@@ -1,0 +1,14 @@
+[Unit]
+Description=Switch the panel to its native 1440x3168 once the compositor is up
+After=lightdm.service multi-user.target
+# Deliberately NOT Before= anything. This gates nothing: if it never runs, the
+# phone simply stays at 1080x2376 @ 120, which is a perfectly good state.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/halium/halium-qhd-switch.sh
+TimeoutStartSec=180
+
+[Install]
+WantedBy=graphical.target

@@ -1,0 +1,13 @@
+# The Adreno GPU node comes up as crw------- root:root on the Ubuntu side, so
+# only root can open it. lomiri-system-compositor runs as root and works, but
+# the greeter/shell runs as the lightdm/phablet user and got
+#     openat("/dev/kgsl-3d0", O_RDWR|O_SYNC) = -1 EACCES
+# followed by SIGSEGV -- the Adreno driver does not handle the failure. Android
+# exposes this node as crw-rw-rw- inside the container; match that.
+#
+# This rule used to live only in the development phone's /etc (system-data), so
+# a clean install booted to an endless boot animation: lomiri-full-greeter
+# segfaulted right after "mirserver: Starting" five times and gave up.
+KERNEL=="kgsl-3d0", MODE="0666"
+KERNEL=="ion", MODE="0666"
+SUBSYSTEM=="dma_heap", MODE="0666"

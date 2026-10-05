@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ===========================================================================
+  OnePlus 8 Pro  (codename: instantnoodlep, SoC: Qualcomm sm8250 "kona")
+  Halium 14.0  /  LineageOS 21  /  Android 14
+  ===========================================================================
+
+  NOTE ON REVISIONS
+  The Halium manifest's global default revision is "refs/heads/lineage-21.0",
+  but the OnePlus repos below use a branch called "lineage-21" (no ".0").
+  Every project therefore pins revision="lineage-21" explicitly. Without
+  this, repo sync fails on all six with "revision not found".
+
+  NOTE ON REMOTE
+  No remote="..." attribute is needed. The Halium manifest defines its
+  default remote "github" with fetch="..", which resolves to
+  https://github.com/ , so "LineageOS/foo" and "TheMuppets/foo" both work.
+  ===========================================================================
+-->
+<manifest>
+
+  <!-- Ubuntu Touch port: the device tree and kernel come from the port's
+       forks, branch lineage-21-ubuntu-touch (LineageOS lineage-21 plus the
+       port's commits). Everything else is stock. -->
+
+  <!-- 1. DEVICE TREE - the OnePlus 8 Pro itself.
+          Describes this specific model: screen, partition layout, which
+          blobs to install, board flags. Small repo. -->
+  <project path="device/oneplus/instantnoodlep"
+           name="jure220/android_device_oneplus_instantnoodlep"
+           revision="lineage-21-ubuntu-touch" />
+
+  <!-- 2. SHARED DEVICE TREE - common to all OnePlus sm8250 phones
+          (8, 8 Pro, 8T, 9R). Required: instantnoodlep's lineage.dependencies
+          lists it, and device.mk does
+          $(call inherit-product, device/oneplus/sm8250-common/common.mk) -->
+  <project path="device/oneplus/sm8250-common"
+           name="LineageOS/android_device_oneplus_sm8250-common"
+           revision="lineage-21" />
+
+  <!-- 3. OPLUS HARDWARE - OnePlus/Oppo framework additions.
+          Required: sm8250-common/common.mk inherits three makefiles from
+          hardware/oplus/. Halium's own manifest does NOT provide this. -->
+  <project path="hardware/oplus"
+           name="LineageOS/android_hardware_oplus"
+           revision="lineage-21" />
+
+  <!-- 4. KERNEL - matches TARGET_KERNEL_SOURCE := kernel/oneplus/sm8250
+          declared in sm8250-common/BoardConfigCommon.mk.
+          This is the tree Halium's hybris-patches get applied to, and the
+          one you will spend most of your porting time in. Large repo. -->
+  <project path="kernel/oneplus/sm8250"
+           name="jure220/android_kernel_oneplus_sm8250"
+           revision="lineage-21-ubuntu-touch" />
+
+  <!-- 5. VENDOR BLOBS, device-specific - closed-source binaries.
+          Provides vendor/oneplus/instantnoodlep/instantnoodlep-vendor.mk,
+          which device.mk inherits.
+          Uses Git LFS for radio/* (modem firmware). -->
+  <project path="vendor/oneplus/instantnoodlep"
+           name="TheMuppets/proprietary_vendor_oneplus_instantnoodlep"
+           revision="lineage-21" />
+
+  <!-- 6. VENDOR BLOBS, sm8250-common - the bulk of the binaries
+          (GPU, camera, audio, sensors, Wi-Fi).
+          Provides vendor/oneplus/sm8250-common/sm8250-common-vendor.mk,
+          which common.mk inherits. Large repo. -->
+  <project path="vendor/oneplus/sm8250-common"
+           name="TheMuppets/proprietary_vendor_oneplus_sm8250-common"
+           revision="lineage-21" />
+
+  <!-- Halium boot image generator. Provides the `mka halium-boot` target,
+       which combines out/target/product/*/kernel with a prebuilt initramfs
+       from github.com/halium/initramfs-tools-halium into halium-boot.img.
+       Halium 14's manifest does not include it and the repo has no
+       halium-14.0 branch, so master is the only option (last commit 2021).
+       docs.ubports.com still documents this as the boot image path. -->
+  <project path="halium/halium-boot"
+           name="Halium/halium-boot"
+           revision="master" />
+
+</manifest>

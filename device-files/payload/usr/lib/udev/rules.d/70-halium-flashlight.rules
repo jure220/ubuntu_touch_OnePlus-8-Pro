@@ -1,0 +1,14 @@
+# Flashlight switch in the status bar.
+#
+# ayatana-indicator-power runs as the session user (phablet) and drives the
+# Qualcomm torch by writing straight to sysfs:
+#     /sys/class/leds/led:torch_0/brightness    255 / 0
+#     /sys/class/leds/led:switch_0/brightness   1 / 0
+# Those attributes stay at the kernel default root:root 0644, because neither the
+# vendor nor the system ueventd.rc has an entry for them. The indicator only
+# checks that the file exists, so it showed the switch, then fopen() failed and
+# the toggle silently did nothing.
+#
+# Group video (gid 44) is the phablet user's; 0664 lets the session write them.
+# All three torch/switch channels are covered so a later choice of LED works too.
+ACTION=="add|change", SUBSYSTEM=="leds", KERNEL=="led:torch_[0-2]|led:switch_[0-2]", RUN+="/bin/chgrp video /sys%p/brightness", RUN+="/bin/chmod 0664 /sys%p/brightness"

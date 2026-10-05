@@ -1,0 +1,21 @@
+# Cross-build environment for Mir 1.8.3 (libmir1server) for the phone:
+# qtmircross:6 (x86 host, arm64 multiarch, 24.04-2.x UBports repo) plus Mir's
+# arm64 build dependencies and the host-side code generators it runs.
+FROM qtmircross:6
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      cmake pkg-config dh-exec python3 python3-pil python3-setuptools \
+      protobuf-compiler capnproto xsltproc \
+      libboost-dev:arm64 libboost-date-time-dev:arm64 libboost-iostreams-dev:arm64 \
+      libboost-program-options-dev:arm64 libboost-system-dev:arm64 \
+      libboost-thread-dev:arm64 libboost-filesystem-dev:arm64 \
+      libdrm-dev:arm64 libegl1-mesa-dev:arm64 libgles2-mesa-dev:arm64 libgbm-dev:arm64 \
+      libglm-dev libprotobuf-dev:arm64 libgoogle-glog-dev:arm64 liblttng-ust-dev:arm64 \
+      libxkbcommon-dev:arm64 libudev-dev:arm64 libxml++2.6-dev:arm64 libglib2.0-dev:arm64 \
+      libfreetype6-dev:arm64 libevdev-dev:arm64 libinput-dev:arm64 uuid-dev:arm64 \
+      nettle-dev:arm64 libcapnp-dev:arm64 libepoxy-dev:arm64 linux-libc-dev:arm64 \
+      libxcb-composite0-dev:arm64 libxcb-xfixes0-dev:arm64 libxcb-render0-dev:arm64 \
+      libxcb-res0-dev:arm64 libxcursor-dev:arm64 libyaml-cpp-dev:arm64 libwayland-dev:arm64 \
+      libwayland-bin \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /b

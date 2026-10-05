@@ -1,0 +1,77 @@
+--- a/scripts/halium
++++ b/scripts/halium
+@@ -409,6 +409,64 @@
+ 	[ -e ${rootmnt}/android/system/lib/modules ] && mount --bind ${rootmnt}/android/system/lib/modules ${rootmnt}/lib/modules
+ }
+ 
++install_halium_device_payload() {
++	# The device port (systemd units, helper scripts, kernel modules, firmware)
++	# ships INSIDE this boot image, not in /userdata. /userdata is user data: it
++	# is wiped by a factory reset and is not something an installable image may
++	# write device files into.
++	#
++	# The upstream mount_halium_overlay() cannot be used for this: it only
++	# bind-mounts over files that ALREADY exist in the rootfs, so it can replace
++	# a file but never add one, and almost everything here is a new file.
++	#
++	# The payload is therefore copied into the rootfs, once, whenever the stamp
++	# in the boot image differs from the one in the rootfs. That makes the boot
++	# image the single source of truth: flashing a new boot image updates the
++	# port, and a reflashed or wiped rootfs is repopulated on the next boot.
++	target=$1
++	src=/halium-device
++
++	[ -d ${src} ] || return 0
++	[ -f ${src}/STAMP ] || return 0
++
++	new=$(cat ${src}/STAMP)
++	old=$(cat ${target}/usr/lib/halium/STAMP 2>/dev/null || echo none)
++	if [ "$new" = "$old" ]; then
++		tell_kmsg "halium payload ${new} already installed"
++		return 0
++	fi
++
++	tell_kmsg "installing halium device payload ${old} -> ${new}"
++
++	# The rootfs is normally mounted read-only; take it rw just for this.
++	remounted=no
++	if ! touch ${target}/.halium-rw-probe 2>/dev/null; then
++		mount -o remount,rw ${target} 2>/dev/null && remounted=yes
++	fi
++	rm -f ${target}/.halium-rw-probe 2>/dev/null
++
++	# Copy with tar, not cp. /bin/cp here is a BUSYBOX applet, and busybox
++	# cp -a refuses to overwrite an existing symlink (EEXIST) instead of
++	# replacing it, which silently broke the whole install the moment the
++	# payload started shipping multi-user.target.wants/*.service symlinks.
++	# GNU cp handles it, so it reproduces on the device and not on a desktop.
++	# busybox tar overwrites symlinks cleanly, and this also preserves modes
++	# and ownership the same way cp -a did.
++	#
++	# The error is captured and logged rather than sent to /dev/null: a silent
++	# "port files may be missing" is almost impossible to diagnose after the fact.
++	_perr=$( (cd ${src}/rootfs && tar cf - .) 2>/dev/null | (cd ${target} && tar xf - 2>&1) )
++	if [ -z "$_perr" ]; then
++		echo "$new" > ${target}/usr/lib/halium/STAMP 2>/dev/null
++		tell_kmsg "halium payload installed"
++	else
++		tell_kmsg "WARNING: halium payload install failed: ${_perr}"
++	fi
++
++	[ "$remounted" = "yes" ] && mount -o remount,ro ${target} 2>/dev/null
++	return 0
++}
++
+ mountroot() {
+ 	# list of possible userdata partition names
+ 	partlist="userdata UDA DATAFS USERDATA"
+@@ -598,6 +656,9 @@
+ 		mount --move /halium-system ${rootmnt}
+ 		mkdir -p ${rootmnt}/android
+ 
++		# Install the device port shipped in this boot image (see the function).
++		install_halium_device_payload ${rootmnt}
++
+ 		# Mounting userdata outside of /android, to avoid having LXC container access it
+ 		mkdir -p ${rootmnt}/userdata
+ 		mount --move /tmpmnt ${rootmnt}/userdata

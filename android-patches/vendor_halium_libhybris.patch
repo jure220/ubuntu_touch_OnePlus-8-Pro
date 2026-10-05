@@ -1,0 +1,127 @@
+# vendor/halium/libhybris
+# base: bf36ece28e23e02989674a4041ec24e03fa49e1f compat: adapt camera and media layers for Android 16
+# apply from the tree root: git -C vendor/halium/libhybris apply $PWD/<this file>
+diff --git a/compat/hwc2/hwc2_compatibility_layer.cpp b/compat/hwc2/hwc2_compatibility_layer.cpp
+index e08f803..632ff53 100644
+--- a/compat/hwc2/hwc2_compatibility_layer.cpp
++++ b/compat/hwc2/hwc2_compatibility_layer.cpp
+@@ -21,6 +21,8 @@
+ #include <sync/sync.h>
+ #include <cutils/properties.h>
+ 
++#include <mutex>
++
+ #include "HWC2.h"
+ #include "ComposerHal.h"
+ #include "hwc2_compatibility_layer.h"
+@@ -39,13 +41,13 @@ public:
+     void onComposerHalHotplug(hal::HWDisplayId display, hal::Connection connection) override {
+         listener->on_hotplug_received(listener, 0, display,
+                                     connection == hal::Connection::CONNECTED,
+-                                    true);
++                                    isPrimaryDisplay(display));
+     }
+ #else
+     void onComposerHalHotplugEvent(hal::HWDisplayId display, HWC2::DisplayHotplugEvent event) override {
+         listener->on_hotplug_received(listener, 0, display,
+                                     event == HWC2::DisplayHotplugEvent::CONNECTED,
+-                                    true);
++                                    isPrimaryDisplay(display));
+     }
+ #endif
+ 
+@@ -76,7 +78,37 @@ public:
+ 
+     virtual ~HWComposerCallback() { };
+ private:
++    /*
++     * The composer HAL brings the built-in panel up before any external
++     * display can be hotplugged, so the first display id we are ever told
++     * about is the primary one. This is the same rule SurfaceFlinger applies
++     * in HWComposer::onHotplugConnect(); there is no other way to identify
++     * the primary display through the HWC2 hotplug callback, whose display
++     * ids are opaque.
++     *
++     * This used to report every display as primary. Clients key their display
++     * slots off this flag (Mir: display_id = primaryDisplay ? HWC_DISPLAY_PRIMARY
++     * : HWC_DISPLAY_EXTERNAL), so an external monitor would overwrite the
++     * built-in panel's slot -- driving the panel at the monitor's mode on
++     * connect, and tearing the panel down on disconnect.
++     *
++     * The id is remembered for the lifetime of the callback and is not
++     * forgotten on disconnect, so that a primary display which disconnects and
++     * comes back is still reported as primary.
++     */
++    bool isPrimaryDisplay(hal::HWDisplayId display) {
++        std::lock_guard<std::mutex> lock(primaryDisplayMutex);
++        if (!primaryDisplayKnown) {
++            primaryDisplayKnown = true;
++            primaryDisplayId = display;
++        }
++        return display == primaryDisplayId;
++    }
++
+     HWC2EventListener *listener;
++    std::mutex primaryDisplayMutex;
++    hal::HWDisplayId primaryDisplayId = 0;
++    bool primaryDisplayKnown = false;
+ };
+ 
+ struct hwc2_compat_device
+diff --git a/compat/media/media_recorder_layer.cpp b/compat/media/media_recorder_layer.cpp
+index d3e17e7..83260e6 100644
+--- a/compat/media/media_recorder_layer.cpp
++++ b/compat/media/media_recorder_layer.cpp
+@@ -143,6 +143,16 @@ public:
+         media_recorder_listener->setReadAudioCb(cb, context);
+     }
+ 
++    // Camera::getRecordingProxy() returns a FRESH object on every call. If the
++    // only reference is the temporary passed to setCamera(), it is destroyed as
++    // soon as that call returns, the remote side sees the binder die
++    // ("CameraSource: Camera recording proxy died"), and CameraSource falls
++    // back to calling ICamera::setVideoTarget() itself -- from the media
++    // process, which is not the pid that opened the camera, so Camera2Client
++    // ::checkPid() rejects it with PERMISSION_DENIED and recording produces a
++    // 0-byte file. Keep the proxy alive here for as long as the recorder lives.
++    android::sp<android::ICameraRecordingProxy> recording_proxy;
++
+ private:
+     android::sp<MediaRecorderListenerWrapper> media_recorder_listener;
+ };
+@@ -233,7 +243,34 @@ int android_recorder_setCamera(MediaRecorderWrapper *mr, CameraControl* control)
+     }
+ 
+     mr->init();
+-    return mr->setCamera(control->camera->remote(), control->camera->getRecordingProxy());
++
++    // Release the camera before handing it to the recorder.
++    //
++    // ICameraRecordingProxy.h documents the sequence, and step 1 is
++    // "The app: Camera.unlock()" -- BEFORE MediaRecorder::setCamera(). Without
++    // it the handover inside CameraSource::isCameraAvailable() does
++    // Camera::create(camera) -> camera->connect(mediaSideClient), which in
++    // Camera2Client::connect() overwrites mRemoteCallback and
++    // mSharedCameraCallbacks while the app still owns them. On this port the
++    // app's client is then torn down, the device reports an error, and by the
++    // time CameraSource calls setVideoTarget() the camera is DISCONNECTED:
++    //     Camera recording proxy died
++    //     notifyError: Error condition 0 reported by HAL
++    //     setVideoTarget: Cannot set video target while in state DISCONNECTED
++    // and recording writes a 0-byte file.
++    //
++    // unlock() clears those callbacks cleanly and leaves mClientPid 0, which is
++    // exactly the state connect() expects to take over from. Doing it here --
++    // in the compat layer that owns the handover -- means every UT camera app
++    // gets the documented behaviour without each one having to remember to call
++    // android_camera_unlock() itself.
++    int unlock_err = control->camera->unlock();
++    if (unlock_err != android::OK)
++        ALOGW("camera unlock() before setCamera returned %d; handover may fail",
++              unlock_err);
++
++    mr->recording_proxy = control->camera->getRecordingProxy();
++    return mr->setCamera(control->camera->remote(), mr->recording_proxy);
+ }
+ 
+ /*!

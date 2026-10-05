@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  OnePlus 8 Pro (instantnoodlep) repowerd device config, Ubuntu Touch port.
+
+  WHY THIS FILE EXISTS
+  repowerd reports auto-brightness availability to Lomiri System Settings via
+  com.lomiri.Repowerd.getBrightnessParams(); the last field of that struct is
+  what gates the "Adjust automatically" checkbox
+  (qml-plugins/brightness/PageComponent.qml: visible: autoBrightnessAvailable).
+  Stock Ubuntu Touch ships only config-default.xml, which hardcodes
+  config_automatic_brightness_available=false and leaves both auto-brightness
+  arrays EMPTY, so the checkbox is hidden on every device without an override.
+  There was no instantnoodlep override, so the toggle never appeared.
+
+  The hardware is fine: OnePlus's own Android overlay
+  (device/oneplus/instantnoodlep/overlay/OPlusFrameworksResTarget/res/values/
+  config.xml) sets config_automatic_brightness_available=true, and sensorfw
+  exposes a working /SensorManager/alssensor reading about 296 lux indoors
+  (verified live 2026-09-02, after the persist-partition fix revived the SLPI).
+
+  WHERE THE CURVE COMES FROM
+  config_autoBrightnessLevels is copied verbatim from that OnePlus overlay.
+  OnePlus expresses the response curve in NITS (config_autoBrightnessDisplay-
+  ValuesNits), which Android 11+ prefers but repowerd does not understand.
+  repowerd reads only config_autoBrightnessLcdBacklightValues, on a 0 to 255
+  scale. So each nits value was converted to a backlight value by linear
+  interpolation through the device's own measured nits to backlight table (the
+  65 entry config_screenBrightnessNits / config_screenBrightnessBacklight pair
+  in the same overlay). That keeps the factory response curve rather than
+  inventing one.
+
+  One deliberate deviation: the darkest point interpolates to 3/255, below
+  repowerd's own config_screenBrightnessSettingMinimum of 10. It is clamped to
+  10 so a pitch dark room cannot drive the panel to near black.
+
+  HOW IT IS LOADED
+  The rootfs is a read only loop image, so /usr/share/powerd/device_configs
+  cannot be edited. repowerd honours $REPOWERD_DEVICE_CONFIG_DIR, so this file
+  is installed to /usr/lib/halium/repowerd-device-configs/ and pointed at by
+  /etc/systemd/system/repowerd.service.d/autobrightness.conf.
+
+  Note the unit also has EnvironmentFile=-/etc/default/repowerd, which looks
+  like the natural hook, but /etc/default is NOT in
+  /etc/system-image/writable-paths and is read only on this image. Of the
+  candidates only /etc/systemd/system and /userdata are writable, hence the
+  drop in plus /userdata split.
+
+  repowerd always parses config-default.xml from that directory, which is why
+  this file keeps that name instead of config-instantnoodlep.xml (repowerd's
+  device name detection was not relied upon).
+
+  To revert: rm /etc/systemd/system/repowerd.service.d/autobrightness.conf,
+  systemctl daemon-reload, systemctl restart repowerd. Everything else in this
+  file matches the stock defaults.
+-->
+<!--
+/*
+** Copyright 2009, The Android Open Source Project
+**
+** Licensed under the Apache License, Version 2.0 (the "License");
+** you may not use this file except in compliance with the License.
+** You may obtain a copy of the License at
+**
+**     http://www.apache.org/licenses/LICENSE-2.0
+**
+** Unless required by applicable law or agreed to in writing, software
+** distributed under the License is distributed on an "AS IS" BASIS,
+** WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+** See the License for the specific language governing permissions and
+** limitations under the License.
+*/
+-->
+
+<!-- These resources are around just to allow their values to be customized
+     for different hardware and product builds.  Do not translate. -->
+<resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
+    <!-- Flag indicating whether the we should enable the automatic brightness in Settings.
+         Software implementation will be used if config_hardware_auto_brightness_available is not set -->
+    <bool name="config_automatic_brightness_available">true</bool>
+
+    <!-- Display low battery warning when battery level dips to this value.
+         Also, the battery stats are flushed to disk when we hit this level.  -->
+    <integer name="config_criticalBatteryWarningLevel">4</integer>
+
+    <!-- Shutdown if the battery temperature exceeds (this value * 0.1) Celsius. -->
+    <integer name="config_shutdownBatteryTemperature">680</integer>
+
+    <!-- Array of light sensor LUX values to define our levels for auto backlight brightness support.
+         The N entries of this array define N + 1 control points as follows:
+         (1-based arrays)
+
+         Point 1:            (0, value[1]):             lux <= 0
+         Point 2:     (level[1], value[2]):  0        < lux <= level[1]
+         Point 3:     (level[2], value[3]):  level[2] < lux <= level[3]
+         ...
+         Point N+1: (level[N], value[N+1]):  level[N] < lux
+
+         The control points must be strictly increasing.  Each control point
+         corresponds to an entry in the brightness backlight values arrays.
+         For example, if LUX == level[1] (first element of the levels array)
+         then the brightness will be determined by value[2] (second element
+         of the brightness values array).
+
+         Spline interpolation is used to determine the auto-brightness
+         backlight values for LUX levels between these control points.
+
+         Must be overridden in platform specific overlays -->
+    <integer-array name="config_autoBrightnessLevels">
+        <item>1</item>
+        <item>4</item>
+        <item>12</item>
+        <item>20</item>
+        <item>28</item>
+        <item>47</item>
+        <item>63</item>
+        <item>86</item>
+        <item>150</item>
+        <item>160</item>
+        <item>220</item>
+        <item>270</item>
+        <item>360</item>
+        <item>420</item>
+        <item>510</item>
+        <item>620</item>
+        <item>1000</item>
+        <item>2000</item>
+        <item>3100</item>
+        <item>5000</item>
+        <item>8000</item>
+        <item>12000</item>
+        <item>16000</item>
+        <item>20000</item>
+    </integer-array>
+
+    <!-- Minimum screen brightness setting allowed by the power manager.
+         The user is forbidden from setting the brightness below this level. -->
+    <integer name="config_screenBrightnessSettingMinimum">10</integer>
+
+    <!-- Maximum screen brightness allowed by the power manager.
+         The user is forbidden from setting the brightness above this level. -->
+    <integer name="config_screenBrightnessSettingMaximum">255</integer>
+
+    <!-- Default screen brightness setting.
+         Must be in the range specified by minimum and maximum. -->
+    <integer name="config_screenBrightnessSettingDefault">102</integer>
+
+    <!-- Screen brightness used to dim the screen when the user activity
+         timeout expires.  May be less than the minimum allowed brightness setting
+         that can be set by the user. -->
+    <integer name="config_screenBrightnessDim">10</integer>
+
+    <!-- Array of output values for LCD backlight corresponding to the LUX values
+         in the config_autoBrightnessLevels array.  This array should have size one greater
+         than the size of the config_autoBrightnessLevels array.
+         The brightness values must be between 0 and 255 and be non-decreasing.
+         This must be overridden in platform specific overlays -->
+    <integer-array name="config_autoBrightnessLcdBacklightValues">
+        <item>10</item>
+        <item>20</item>
+        <item>50</item>
+        <item>78</item>
+        <item>90</item>
+        <item>108</item>
+        <item>113</item>
+        <item>115</item>
+        <item>119</item>
+        <item>124</item>
+        <item>125</item>
+        <item>129</item>
+        <item>132</item>
+        <item>137</item>
+        <item>140</item>
+        <item>144</item>
+        <item>148</item>
+        <item>159</item>
+        <item>185</item>
+        <item>199</item>
+        <item>212</item>
+        <item>223</item>
+        <item>235</item>
+        <item>245</item>
+        <item>255</item>
+    </integer-array>
+</resources>

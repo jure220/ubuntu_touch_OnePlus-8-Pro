@@ -1,0 +1,14 @@
+[Unit]
+Description=Start Qualcomm XTRA (A-GPS) assistance-data downloader
+After=lxc-android-config.service
+# Gates NOTHING, per project rule 3. Nothing orders itself after this unit and
+# it detaches immediately, so it can never delay or block the boot.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'setsid /usr/lib/halium/halium-agps.sh >/dev/null 2>&1 < /dev/null &'
+TimeoutStartSec=15
+
+[Install]
+WantedBy=multi-user.target

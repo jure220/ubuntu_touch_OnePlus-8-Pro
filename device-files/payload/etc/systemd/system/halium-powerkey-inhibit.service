@@ -1,0 +1,29 @@
+[Unit]
+Description=Hold a power-key inhibitor so logind does not act on it
+Documentation=man:systemd-inhibit(1)
+After=systemd-logind.service dbus.service
+Wants=systemd-logind.service
+
+[Service]
+# systemd-logind's default is HandlePowerKey=poweroff. A shell normally holds an
+# inhibitor lock so logind ignores the key; repowerd cannot, because it fails to
+# resolve the session:
+#     repowerd: LogindSessionTracker: dbus_get_session_by_pid() failed:
+#               org.freedesktop.login1.NoSessionForPID
+# (the shell is a systemd USER unit, so its cgroup is user@32011.service and
+#  logind's PID->session lookup returns nothing). With no inhibitor held, ONE
+#  press of the power button made logind poweroff/reboot the phone --
+#  "systemd-logind: The system will reboot now!".
+#
+# /etc/systemd/logind.conf.d is read-only here, so instead of configuring
+# HandlePowerKey=ignore we hold the lock ourselves. Same effect, and it uses
+# the documented API rather than fighting a read-only rootfs.
+Type=simple
+ExecStart=/usr/bin/systemd-inhibit --what=handle-power-key:handle-suspend-key:handle-lid-switch \
+          --who=halium --why=repowerd-owns-the-power-button --mode=block \
+          /usr/bin/sleep infinity
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

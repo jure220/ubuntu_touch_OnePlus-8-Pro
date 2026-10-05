@@ -1,0 +1,30 @@
+# build/soong
+# base: 7e2be266cfde19c5e0cbc8e4ed016d5572abd4fb check_boot_jars: Add oplus packages to whitelist
+# apply from the tree root: git -C build/soong apply $PWD/<this file>
+diff --git a/rust/builder.go b/rust/builder.go
+index c855cfb..1fa672f 100644
+--- a/rust/builder.go
++++ b/rust/builder.go
+@@ -141,7 +141,21 @@ func TransformSrctoDylib(ctx ModuleContext, mainSrc android.Path, deps PathDeps,
+ 
+ func TransformSrctoStatic(ctx ModuleContext, mainSrc android.Path, deps PathDeps, flags Flags,
+ 	outputFile android.WritablePath) buildOutput {
+-	flags.GlobalRustFlags = append(flags.GlobalRustFlags, "-C lto=thin")
++	// (halium/instantnoodlep) ThinLTO disabled for Rust staticlibs.
++	//
++	// Building libapexsupport.ffi for 32-bit arm fails with:
++	//   error: failed to parse bitcode for LTO module: Invalid value
++	//          (Producer: 'LLVM17.0.6' Reader: 'LLVM 17.0.6')
++	//
++	// rustc 1.75.0 and clang-r510928 both report LLVM 17.0.6 but emit
++	// incompatible bitcode. Rlibs are already built WITHOUT lto (see
++	// TransformSrctoRlib above), so the staticlib step is the only place that
++	// tries to ThinLTO across them, and it is the only variant that fails:
++	// 101 other rust targets built fine, and only android_arm (32-bit) broke.
++	//
++	// Dropping lto=thin here costs some size/perf on Rust staticlibs and
++	// changes nothing else. Revert with:
++	//   git -C build/soong checkout rust/builder.go
+ 	return transformSrctoCrate(ctx, mainSrc, deps, flags, outputFile, "staticlib")
+ }
+ 

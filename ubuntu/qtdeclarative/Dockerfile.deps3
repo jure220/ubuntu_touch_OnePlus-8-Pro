@@ -1,0 +1,14 @@
+FROM qtbuild:deps
+ENV DEBIAN_FRONTEND=noninteractive
+# Host-arch (amd64) code generators are needed because the cross build compiles
+# them for arm64 and then tries to execute them. They must NOT be *installed*:
+# installing amd64 qtdeclarative5-dev-tools adds amd64 Qt module .pri files that
+# break qmake's feature resolution for the arm64 target
+# ("Project ERROR: Unknown feature object animation"). So unpack them into
+# /opt/hosttools and reference them by path only.
+RUN apt-get update && \
+    cd /tmp && apt-get download qtdeclarative5-dev-tools && \
+    mkdir -p /opt/hosttools && \
+    dpkg-deb -x qtdeclarative5-dev-tools_*.deb /opt/hosttools && \
+    rm -f /tmp/*.deb && rm -rf /var/lib/apt/lists/* && \
+    ls -l /opt/hosttools/usr/lib/qt5/bin/
