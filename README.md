@@ -3,10 +3,6 @@
 Ubuntu Touch 24.04-2.x (Halium 14) for the OnePlus 8 Pro (`instantnoodlep`,
 IN2020 / IN2021 / IN2023 / IN2025).
 
-**Port by Z3PHYR.** The download is on the
-[Releases](https://github.com/jure220/ubuntu_touch_OnePlus-8-Pro/releases) page:
-one recovery-flashable zip.
-
 ## What works
 
 - Display at 1080x2376 / 120 Hz, touch, WiFi, Bluetooth, audio, vibration
@@ -26,7 +22,7 @@ You need an unlocked bootloader and the phone on **stock OxygenOS 13**: the
 port uses the vendor and odm partitions that OxygenOS 13 leaves on the phone.
 
 1. Boot a recovery that can mount userdata and dynamic partitions, for example
-   OrangeFox for OnePlus 8 / 8 Pro (`fastboot boot OrangeFox.img`).
+   OrangeFox.
 2. Wipe > Format Data, and choose **ext4** as the file system.
 3. Flash the zip. It also switches off verified boot (vbmeta), because the boot
    image is not signed by OnePlus.
