@@ -5,7 +5,7 @@ The release zip is three images:
 | Image | Made from |
 |---|---|
 | `ubuntu-touch-rootfs.tar.gz` | the stock UBports 24.04-2.x rootfs, unmodified (CI build #104, sha256 `eb7ec756...3e637773`) |
-| `android-rootfs.img.gz` | the Halium 14 Android tree below, `mka systemimage` |
+| `android-rootfs.img.gz` | the Halium 14 Android tree below, `mka systemimage`, then `device-files/make-android-rootfs.sh` |
 | `halium-boot.img` | kernel + dtb from the Halium tree, ramdisk = Halium's initramfs + `device-files/initramfs-halium-scripts.patch` + `device-files/payload/` |
 
 Everything runs in Docker; nothing needs to be installed on the host apart from
@@ -15,12 +15,17 @@ qemu-user-static with binfmt registered.
 
 ## 1. Android tree, kernel and system image
 
+`manifests/pinned-v1.0.xml` is the exact tree v1.0 was built from: all 1280
+projects pinned to the commits that were synced, with the kernel and the device
+tree taken from the port's forks (branch `lineage-21-ubuntu-touch`):
+
+- https://github.com/jure220/android_kernel_oneplus_sm8250
+- https://github.com/jure220/android_device_oneplus_instantnoodlep
+
 ```sh
 mkdir -p halium/android && cd halium/android
-repo init -u https://github.com/Halium/android -b halium-14.0 --git-lfs
-# v1.0 was built from manifest commit 06581b45 (git -C .repo/manifests checkout 06581b45)
-mkdir -p .repo/local_manifests
-cp <this repo>/manifests/*.xml .repo/local_manifests/
+repo init --standalone-manifest --git-lfs \
+    -u https://raw.githubusercontent.com/jure220/ubuntu_touch_OnePlus-8-Pro/main/manifests/pinned-v1.0.xml
 repo sync -c -j8
 hybris-patches/apply-patches.sh --mb
 for f in <this repo>/android-patches/*.patch; do
@@ -28,11 +33,11 @@ for f in <this repo>/android-patches/*.patch; do
 done
 ```
 
-The local manifests take the kernel and the device tree from the port's forks
-(branch `lineage-21-ubuntu-touch`):
-
-- https://github.com/jure220/android_kernel_oneplus_sm8250
-- https://github.com/jure220/android_device_oneplus_instantnoodlep
+(`-u file:///path/to/pinned-v1.0.xml` works as well. To follow the moving
+branches instead, `repo init -u https://github.com/Halium/android -b
+halium-14.0` and copy `manifests/{instantnoodlep,qcom-sm8250,lineage-extras}.xml`
+to `.repo/local_manifests/`; Halium's hybris-patches have moved since v1.0, so
+the patches below may then need rebasing.)
 
 `android-patches/` holds the port's changes to projects that are not forked.
 Each file names its project and the commit it applies to, which is the
@@ -57,8 +62,11 @@ docker run --rm -v "$PWD/../..:/work" -e ALLOW_MISSING_DEPENDENCIES=true \
     mka systemimage halium-boot vendorimage -j$(nproc)'
 ```
 
-- `out/target/product/instantnoodlep/system.img` gzipped is
-  `android-rootfs.img.gz`.
+- `android-rootfs.img.gz`: `device-files/make-android-rootfs.sh
+  out/target/product/instantnoodlep/system.img android-rootfs.img.gz` (raw
+  ext4, 600 MB, `/system_ext` and `/product` replaced by links into `/system`;
+  without the links Android init does not find system_ext's services). Run it
+  in the halium-build image, which has simg2img and e2fsprogs.
 - `halium-boot.img` is the base for the boot image in step 3.
 - The vendor image is not used. Building it produces the signed, stripped
   kernel modules under
@@ -164,7 +172,15 @@ device-files/build-release-zip.sh halium-boot.img \
     android-rootfs.img.gz out.zip
 ```
 
-The rootfs is
-`https://ci.ubports.com/job/ubuntu-touch-rootfs/job/ubports%2F24.04-2.x/104/artifact/ubuntu-touch-android9plus-rootfs-arm64.tar.gz`.
-The script checks it against that sha256, then reads every member back out of
-the finished zip to verify it.
+The rootfs is UBports CI build #104 of `ubuntu-touch-rootfs/ubports/24.04-2.x`,
+`ubuntu-touch-android9plus-rootfs-arm64.tar.gz`. UBports' CI keeps the artifacts
+of recent builds only and #104's are gone, but the release zip carries the file
+unmodified:
+
+```sh
+unzip -p instantnoodlep-ubuntu-touch-24.04-2.x-20260924.zip images/ubuntu-touch-rootfs.tar.gz \
+    > ubuntu-touch-android9plus-rootfs-arm64.tar.gz
+```
+
+The script checks it against the sha256 above, then reads every member back out
+of the finished zip to verify it.

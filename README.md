@@ -65,7 +65,7 @@ walks through it.
 |---|---|
 | Linux kernel 4.19 | [jure220/android_kernel_oneplus_sm8250](https://github.com/jure220/android_kernel_oneplus_sm8250/tree/lineage-21-ubuntu-touch), branch `lineage-21-ubuntu-touch` (LineageOS `lineage-21` + the port's commits) |
 | Device tree | [jure220/android_device_oneplus_instantnoodlep](https://github.com/jure220/android_device_oneplus_instantnoodlep/tree/lineage-21-ubuntu-touch), branch `lineage-21-ubuntu-touch` |
-| Android tree | [`manifests/`](manifests) (local manifests for Halium 14), [`android-patches/`](android-patches) (changes to Halium and AOSP projects) |
+| Android tree | [`manifests/pinned-v1.0.xml`](manifests/pinned-v1.0.xml) (the exact tree v1.0 was built from), [`android-patches/`](android-patches) (changes to Halium and AOSP projects) |
 | Device port | [`device-files/payload/`](device-files/payload): systemd units, scripts, udev rules, configs, prebuilt libraries; installed into the rootfs by the boot image |
 | Boot image and zip | [`device-files/`](device-files): `build-boot-payload.sh`, `initramfs-halium-scripts.patch`, `build-release-zip.sh`, the installer |
 | IR Camera app | [`apps/ircam/`](apps/ircam): Camera2 client through libhybris, QML plugin, click and flashable-zip packaging |
