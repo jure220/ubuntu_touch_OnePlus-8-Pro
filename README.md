@@ -21,12 +21,11 @@ Fingerprint enrolment, microphone (My device has faulty hardware)
 You need an unlocked bootloader and the phone on **stock OxygenOS 13**: the
 port uses the vendor and odm partitions that OxygenOS 13 leaves on the phone.
 
-1. Boot a recovery that can mount userdata and dynamic partitions, for example
-   OrangeFox.
-2. Wipe > Format Data, and choose **ext4** as the file system.
-3. Flash the zip. It also switches off verified boot (vbmeta), because the boot
-   image is not signed by OnePlus.
-4. Reboot.
+1.Flash a recovery that can mount userdata and dynamic partitions, for example OrangeFox.
+2. Wipe > Format Data, 
+3. Go to Menu > Partitions Management > Partition Editor > Data. Then select the check mark, click Change FS and select ext4 as the file system.
+4. Flash ubuntu touch zip via adb sideload (adb sideload instantnoodlep-ubuntu-touch-...), then reboot the device.
+5. After the first boot and setup, reboot back in recovery and flash ircam via adb sideload to get the IR camera on the phone working.
 
 ## IR Camera app
 
